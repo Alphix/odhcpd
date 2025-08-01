@@ -172,6 +172,12 @@ struct config {
 	int log_level;
 };
 
+/* 2-byte type + 128-byte DUID, RFC 3315, 9.1 */
+#define DUID_MAX_LEN	130
+struct duid {
+	uint8_t len;
+	uint8_t id[DUID_MAX_LEN];
+};
 
 struct lease {
 	struct vlist_node node;
@@ -179,8 +185,8 @@ struct lease {
 	uint32_t ipaddr;
 	uint64_t hostid;
 	struct ether_addr mac;
-	uint16_t duid_len;
-	uint8_t *duid;
+	size_t duid_count;
+	struct duid *duids;
 	uint32_t leasetime;
 	char *hostname;
 };
