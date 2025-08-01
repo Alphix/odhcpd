@@ -182,7 +182,7 @@ const struct uci_blob_param_list interface_attr_list = {
 const struct blobmsg_policy lease_attrs[LEASE_ATTR_MAX] = {
 	[LEASE_ATTR_IP] = { .name = "ip", .type = BLOBMSG_TYPE_STRING },
 	[LEASE_ATTR_MAC] = { .name = "mac", .type = BLOBMSG_TYPE_ARRAY },
-	[LEASE_ATTR_DUID] = { .name = "duid", .type = BLOBMSG_TYPE_STRING },
+	[LEASE_ATTR_DUID] = { .name = "duid", .type = BLOBMSG_TYPE_ARRAY },
 	[LEASE_ATTR_HOSTID] = { .name = "hostid", .type = BLOBMSG_TYPE_STRING },
 	[LEASE_ATTR_LEASETIME] = { .name = "leasetime", .type = BLOBMSG_TYPE_STRING },
 	[LEASE_ATTR_NAME] = { .name = "name", .type = BLOBMSG_TYPE_STRING },
@@ -440,14 +440,28 @@ static void free_lease(struct lease *l)
 	free(l);
 }
 
+static bool parse_duid(struct duid *duid, struct blob_attr *c)
+{
+	ssize_t len;
+
+	len = (blobmsg_data_len(c) - 1) / 2;
+	if (len > DUID_MAX_LEN)
+		return false;
+	len = odhcpd_unhexlify(duid->id, len, blobmsg_get_string(c));
+	if (len < 0)
+		return false;
+	duid->len = len;
+	return true;
+}
+
 int set_lease_from_blobmsg(struct blob_attr *ba)
 {
 	struct blob_attr *tb[LEASE_ATTR_MAX], *c;
 	struct lease *l = NULL;
 	int mac_count = 0;
 	struct ether_addr *macs;
-	size_t duidlen = 0;
-	uint8_t *duid;
+	int duid_count = 0;
+	struct duid *duids;
 
 	blobmsg_parse(lease_attrs, LEASE_ATTR_MAX, tb, blob_data(ba), blob_len(ba));
 
@@ -457,12 +471,15 @@ int set_lease_from_blobmsg(struct blob_attr *ba)
 			goto err;
 	}
 
-	if ((c = tb[LEASE_ATTR_DUID]))
-		duidlen = (blobmsg_data_len(c) - 1) / 2;
+	if ((c = tb[LEASE_ATTR_DUID])) {
+		duid_count = blobmsg_check_array_len(c, BLOBMSG_TYPE_STRING, blob_raw_len(c));
+		if (duid_count < 0)
+			goto err;
+	}
 
 	l = calloc_a(sizeof(*l),
 		     &macs, mac_count * sizeof(*macs),
-		     &duid, duidlen);
+		     &duids, duid_count * sizeof(*duids));
 	if (!l)
 		goto err;
 
@@ -480,15 +497,16 @@ int set_lease_from_blobmsg(struct blob_attr *ba)
 	}
 
 	if ((c = tb[LEASE_ATTR_DUID])) {
-		ssize_t len;
+		struct blob_attr *cur;
+		size_t rem;
+		int i = 0;
 
-		l->duid = duid;
-		len = odhcpd_unhexlify(l->duid, duidlen, blobmsg_get_string(c));
+		l->duid_count = duid_count;
+		l->duids = duids;
 
-		if (len < 0)
-			goto err;
-
-		l->duid_len = len;
+		blobmsg_for_each_attr(cur, c, rem)
+			if (!parse_duid(&duids[i++], cur))
+				goto err;
 	}
 
 	if ((c = tb[LEASE_ATTR_NAME])) {
@@ -1518,14 +1536,19 @@ static int lease_cmp(const void *k1, const void *k2, _unused void *ptr)
 	const struct lease *l1 = k1, *l2 = k2;
 	int cmp = 0;
 
-	if (l1->duid_len != l2->duid_len)
-		return l1->duid_len - l2->duid_len;
+	if (l1->duid_count != l2->duid_count)
+		return l1->duid_count - l2->duid_count;
 
-	if (l1->duid_len && l2->duid_len)
-		cmp = memcmp(l1->duid, l2->duid, l1->duid_len);
+	for (size_t i = 0; i < l1->duid_count; i++) {
+		if (l1->duids[i].len != l2->duids[i].len)
+			return l1->duids[i].len - l2->duids[i].len;
 
-	if (cmp)
-		return cmp;
+		if (l1->duids[i].len && l2->duids[i].len) {
+			cmp = memcmp(l1->duids[i].id, l2->duids[i].id, l1->duids[i].len);
+			if (cmp)
+				return cmp;
+		}
+	}
 
 	if (l1->mac_count != l2->mac_count)
 		return l1->mac_count - l2->mac_count;
@@ -1604,8 +1627,12 @@ struct lease *config_find_lease_by_duid(const uint8_t *duid, const uint16_t len)
 	struct lease *l;
 
 	vlist_for_each_element(&leases, l, node) {
-		if (l->duid_len == len && !memcmp(l->duid, duid, len))
-			return l;
+		for (size_t i = 0; i < l->duid_count; i++) {
+			if (l->duids[i].len != len)
+				continue;
+			if (!memcmp(l->duids[i].id, duid, len))
+				return l;
+		}
 	}
 
 	return NULL;
