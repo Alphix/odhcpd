@@ -184,7 +184,8 @@ struct lease {
 	struct list_head assignments;
 	uint32_t ipaddr;
 	uint64_t hostid;
-	struct ether_addr mac;
+	size_t mac_count;
+	struct ether_addr *macs;
 	size_t duid_count;
 	struct duid *duids;
 	uint32_t leasetime;

@@ -467,10 +467,18 @@ int set_lease_from_blobmsg(struct blob_attr *ba)
 {
 	struct blob_attr *tb[LEASE_ATTR_MAX], *c;
 	struct lease *l = NULL;
+	int mac_count = 0;
+	struct ether_addr *macs;
 	int duid_count = 0;
 	struct duid *duids;
 
 	blobmsg_parse(lease_attrs, LEASE_ATTR_MAX, tb, blob_data(ba), blob_len(ba));
+
+	if ((c = tb[LEASE_ATTR_MAC])) {
+		mac_count = get_string_or_string_list_countt(c);
+		if (mac_count < 0)
+			goto err;
+	}
 
 	if ((c = tb[LEASE_ATTR_DUID])) {
 		duid_count = get_string_or_string_list_count(c);
@@ -478,13 +486,35 @@ int set_lease_from_blobmsg(struct blob_attr *ba)
 			goto err;
 	}
 
-	l = calloc_a(sizeof(*l), &duids, duid_count * sizeof(*duids));
+	l = calloc_a(sizeof(*l),
+		     &macs, mac_count * sizeof(*macs),
+		     &duids, duid_count * sizeof(*duids));
 	if (!l)
 		goto err;
 
-	if ((c = tb[LEASE_ATTR_MAC]))
-		if (!ether_aton_r(blobmsg_get_string(c), &l->mac))
+	if ((c = tb[LEASE_ATTR_MAC])) {
+		struct blob_attr *cur;
+		size_t rem;
+		int i = 0;
+
+		l->mac_count = mac_count;
+		l->macs = macs;
+
+		switch (blobmsg_type(c)) {
+		case BLOBMSG_TYPE_STRING:
+			if (!ether_aton_r(blobmsg_get_string(c), &l->macs[0]))
+				goto err;
+			break;
+		case BLOBMSG_TYPE_ARRAY:
+			blobmsg_for_each_attr(cur, c, rem) {
+				if (!ether_aton_r(blobmsg_get_string(c), &l->macs[i++]))
+					goto err;
+			}
+			break;
+		default:
 			goto err;
+		}
+	}
 
 	if ((c = tb[LEASE_ATTR_DUID])) {
 		struct blob_attr *cur;
@@ -1553,8 +1583,18 @@ static int lease_cmp(const void *k1, const void *k2, _unused void *ptr)
 		}
 	}
 
-	return memcmp(l1->mac.ether_addr_octet, l2->mac.ether_addr_octet,
-				sizeof(l1->mac.ether_addr_octet));
+	if (l1->mac_count != l2->mac_count)
+		return l1->mac_count - l2->mac_count;
+
+	for (size_t i = 0; i < l1->mac_count; i++) {
+		cmp = memcmp(l1->macs[i].ether_addr_octet,
+			     l2->macs[i].ether_addr_octet,
+			     sizeof(l1->macs[i].ether_addr_octet));
+		if (cmp)
+			return cmp;
+	}
+
+	return 0;
 }
 
 static void lease_change_config(struct lease *l_old, struct lease *l_new)
@@ -1636,9 +1676,11 @@ struct lease *config_find_lease_by_mac(const uint8_t *mac)
 	struct lease *l;
 
 	vlist_for_each_element(&leases, l, node) {
-		if (!memcmp(l->mac.ether_addr_octet, mac,
-				sizeof(l->mac.ether_addr_octet)))
-			return l;
+		for (size_t i = 0; i < l->mac_count; i++) {
+			if (!memcmp(l->macs[i].ether_addr_octet, mac,
+				    sizeof(l->macs[i].ether_addr_octet)))
+				return l;
+		}
 	}
 
 	return NULL;
