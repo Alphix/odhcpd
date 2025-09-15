@@ -1383,7 +1383,7 @@ ssize_t dhcpv6_ia_handle_IAs(uint8_t *buf, size_t buflen, struct interface *ifac
 	uint8_t *clid_data = NULL, mac[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 	size_t hostname_len = 0, response_len = 0;
 	bool notonlink = false, rapid_commit = false, accept_reconf = false;
-	char duidbuf[261], hostname[256];
+	char duidbuf[(DUID_MAX_LEN * 2) + 1], hostname[256];
 
 	dhcpv6_for_each_option(start, end, otype, olen, odata) {
 		if (otype == DHCPV6_OPT_CLIENTID) {
@@ -1395,7 +1395,7 @@ ssize_t dhcpv6_ia_handle_IAs(uint8_t *buf, size_t buflen, struct interface *ifac
 			else if (olen == 10 && odata[0] == 0 && odata[1] == 3)
 				memcpy(mac, &odata[4], sizeof(mac));
 
-			if (olen <= 130)
+			if (olen <= DUID_MAX_LEN)
 				odhcpd_hexlify(duidbuf, odata, olen);
 		} else if (otype == DHCPV6_OPT_FQDN && olen >= 2 && olen <= 255) {
 			uint8_t fqdn_buf[256];
@@ -1410,7 +1410,7 @@ ssize_t dhcpv6_ia_handle_IAs(uint8_t *buf, size_t buflen, struct interface *ifac
 			rapid_commit = true;
 	}
 
-	if (!clid_data || !clid_len || clid_len > 130)
+	if (!clid_data || !clid_len || clid_len > DUID_MAX_LEN)
 		goto out;
 
 	l = config_find_lease_by_duid(clid_data, clid_len);

@@ -331,7 +331,7 @@ static void handle_client_request(void *addr, void *data, size_t len,
 		uint8_t mac[6];
 		uint16_t clientid_type;
 		uint16_t clientid_length;
-		uint8_t clientid_buf[130];
+		uint8_t clientid_buf[DUID_MAX_LEN];
 	} dest = {
 		.msg_type = DHCPV6_MSG_REPLY,
 		.serverid_type = htons(DHCPV6_OPT_SERVERID),
@@ -601,7 +601,7 @@ static void handle_client_request(void *addr, void *data, size_t len,
 
 	/* Go through options and find what we need */
 	dhcpv6_for_each_option(opts, opts_end, otype, olen, odata) {
-		if (otype == DHCPV6_OPT_CLIENTID && olen <= 130) {
+		if (otype == DHCPV6_OPT_CLIENTID && olen <= DUID_MAX_LEN) {
 			dest.clientid_length = htons(olen);
 			memcpy(dest.clientid_buf, odata, olen);
 			iov[IOV_DEST].iov_len += 4 + olen;
