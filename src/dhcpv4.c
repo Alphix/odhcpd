@@ -170,7 +170,7 @@ static void dhcpv4_fr_send(struct dhcp_assignment *a)
 		.chaddr = { 0 },
 		.sname = { 0 },
 		.file = { 0 },
-		.options = { DHCPV4_MAGIC_COOKIE },
+		.cookie = htonl(DHCPV4_MAGIC_COOKIE),
 	};
 	struct dhcpv4_auth_forcerenew *auth_o, auth = {
 		.protocol = DHCPV4_AUTH_PROTO_RKAP,
@@ -181,7 +181,7 @@ static void dhcpv4_fr_send(struct dhcp_assignment *a)
 		.key = { 0 },
 	};
 	struct interface *iface = a->iface;
-	uint8_t *cursor = &fr_msg.options[DHCPV4_MAGIC_COOKIE_LEN];
+	uint8_t *cursor = fr_msg.options;
 	uint8_t msg = DHCPV4_MSG_FORCERENEW;
 	struct sockaddr_in dest = {
 		.sin_family = AF_INET,
@@ -549,8 +549,10 @@ void dhcpv4_handle_msg(void *addr, void *data, size_t len,
 	if (iface->dhcpv4 == MODE_DISABLED)
 		return;
 
-	if (len < offsetof(struct dhcpv4_message, options) + 4 ||
-			req->op != DHCPV4_OP_BOOTREQUEST || req->hlen != ETH_ALEN)
+	/* FIXME: would checking the magic cookie value here break any clients? */
+
+	if (len < offsetof(struct dhcpv4_message, options) ||
+	    req->op != DHCPV4_OP_BOOTREQUEST || req->hlen != ETH_ALEN)
 		return;
 
 	syslog(LOG_DEBUG, "Got DHCPv4 request on %s", iface->name);
@@ -573,11 +575,11 @@ void dhcpv4_handle_msg(void *addr, void *data, size_t len,
 		.ciaddr = { INADDR_ANY },
 		.giaddr = req->giaddr,
 		.siaddr = iface->dhcpv4_local,
-		.options = { DHCPV4_MAGIC_COOKIE },
+		.cookie = htonl(DHCPV4_MAGIC_COOKIE),
 	};
 	memcpy(reply.chaddr, req->chaddr, sizeof(reply.chaddr));
 
-	uint8_t *cursor = &reply.options[DHCPV4_MAGIC_COOKIE_LEN];
+	uint8_t *cursor = reply.options;
 	uint8_t reqmsg = DHCPV4_MSG_REQUEST;
 	uint8_t msg = DHCPV4_MSG_ACK;
 
@@ -590,9 +592,10 @@ void dhcpv4_handle_msg(void *addr, void *data, size_t len,
 	bool accept_fr_nonce = false;
 	bool incl_fr_opt = false;
 
-	uint8_t *start = &req->options[4];
-	uint8_t *end = ((uint8_t*)data) + len;
+	uint8_t *start = req->options;
+	uint8_t *end = ((uint8_t *)data) + len;
 	struct dhcpv4_option *opt;
+
 	dhcpv4_for_each_option(start, end, opt) {
 		if (opt->type == DHCPV4_OPT_MESSAGE && opt->len == 1)
 			reqmsg = opt->data[0];
