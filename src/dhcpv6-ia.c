@@ -426,7 +426,7 @@ static void dhcpv6_ia_write_hostsfile(time_t now)
 	rename(tmp_hostsfile, config.dhcp_hostsfile);
 }
 
-void dhcpv6_ia_write_statefile(void)
+void dhcpv6_ia_write_state(void)
 {
 	char leasebuf[512];
 	struct write_ctxt ctxt = {
@@ -935,7 +935,7 @@ static void handle_addrlist_change(struct netevent_handler_info *info)
 			free_assignment(c);
 	}
 
-	dhcpv6_ia_write_statefile();
+	dhcpv6_ia_write_state();
 }
 
 static void reconf_timeout_cb(struct uloop_timeout *event)
@@ -1704,7 +1704,7 @@ ssize_t dhcpv6_ia_handle_IAs(uint8_t *buf, size_t buflen, struct interface *ifac
 		break;
 	}
 
-	dhcpv6_ia_write_statefile();
+	dhcpv6_ia_write_state();
 
 out:
 	return response_len;

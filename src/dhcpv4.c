@@ -547,7 +547,7 @@ dhcpv4_lease(struct interface *iface, enum dhcpv4_msg msg, const uint8_t *mac,
 			a->valid_until = now - 1;
 	}
 
-	dhcpv6_ia_write_statefile();
+	dhcpv6_ia_write_state();
 
 	return a;
 }

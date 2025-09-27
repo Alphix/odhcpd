@@ -523,7 +523,7 @@ int dhcpv6_ia_init(void);
 int dhcpv6_ia_setup_interface(struct interface *iface, bool enable);
 void dhcpv6_ia_enum_addrs(struct interface *iface, struct dhcp_assignment *c, time_t now,
 				dhcpv6_binding_cb_handler_t func, void *arg);
-void dhcpv6_ia_write_statefile(void);
+void dhcpv6_ia_write_state(void);
 
 int netlink_add_netevent_handler(struct netevent_handler *hdlr);
 ssize_t netlink_get_interface_addrs(const int ifindex, bool v6,
