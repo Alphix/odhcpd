@@ -476,8 +476,9 @@ void dhcpv6_ia_write_statefile(void)
 
 				odhcpd_hexlify(duidbuf, ctxt.c->clid_data, ctxt.c->clid_len);
 
-				/* iface DUID iaid hostname lifetime assigned_host_id length [addrs...] */
-				ctxt.buf_idx = snprintf(ctxt.buf, ctxt.buf_len, "# %s %s %x %s%s %"PRId64" ",
+				/* <iface> <DUID> <IAID> <hostname> <valid_until> <assigned_host_id|assigned_subnet_id> <length> [addr [addr...]] */
+				ctxt.buf_idx = snprintf(ctxt.buf, ctxt.buf_len,
+							"# %s %s %" PRIx32 " %s%s %" PRId64 " ",
 							ctxt.iface->ifname, duidbuf, ntohl(ctxt.c->iaid),
 							(ctxt.c->flags & OAF_BROKEN_HOSTNAME) ? "broken\\x20" : "",
 							(ctxt.c->hostname ? ctxt.c->hostname : "-"),
@@ -487,10 +488,10 @@ void dhcpv6_ia_write_statefile(void)
 
 				if (ctxt.c->flags & OAF_DHCPV6_NA)
 					ctxt.buf_idx += snprintf(ctxt.buf + ctxt.buf_idx, ctxt.buf_len - ctxt.buf_idx,
-								 "%" PRIx64" %u ", ctxt.c->assigned_host_id, (unsigned)ctxt.c->length);
+								 "%" PRIx64 " %u ", ctxt.c->assigned_host_id, (unsigned)ctxt.c->length);
 				else
 					ctxt.buf_idx += snprintf(ctxt.buf + ctxt.buf_idx, ctxt.buf_len - ctxt.buf_idx,
-								 "%" PRIx32" %u ", ctxt.c->assigned_subnet_id, (unsigned)ctxt.c->length);
+								 "%" PRIx32 " %u ", ctxt.c->assigned_subnet_id, (unsigned)ctxt.c->length);
 
 				if (INFINITE_VALID(ctxt.c->valid_until) || ctxt.c->valid_until > now)
 					dhcpv6_ia_enum_addrs(ctxt.iface, ctxt.c, now,
@@ -509,12 +510,13 @@ void dhcpv6_ia_write_statefile(void)
 					continue;
 
 				char ipbuf[INET6_ADDRSTRLEN];
-				char duidbuf[16];
-				odhcpd_hexlify(duidbuf, c->hwaddr, sizeof(c->hwaddr));
+				char hwaddr[16];
+				odhcpd_hexlify(hwaddr, c->hwaddr, sizeof(c->hwaddr));
 
-				/* iface DUID iaid hostname lifetime assigned length [addrs...] */
-				ctxt.buf_idx = snprintf(ctxt.buf, ctxt.buf_len, "# %s %s ipv4 %s%s %"PRId64" %x 32 ",
-							ctxt.iface->ifname, duidbuf,
+				/* iface <hwaddr> "ipv4" <hostname> <valid_until> <ipaddr-hex> "32" <ipaddr-str>"/32" */
+				ctxt.buf_idx = snprintf(ctxt.buf, ctxt.buf_len,
+							"# %s %s ipv4 %s%s %" PRId64 " %" PRIx32 " 32 ",
+							ctxt.iface->ifname, hwaddr,
 							(c->flags & OAF_BROKEN_HOSTNAME) ? "broken\\x20" : "",
 							(c->hostname ? c->hostname : "-"),
 							(c->valid_until > now ?
