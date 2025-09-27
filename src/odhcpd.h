@@ -170,7 +170,12 @@ struct config {
 	bool legacy;
 	bool main_dhcpv4;
 	char *dhcp_cb;
-	char *dhcp_statefile;
+
+	char *dhcp_leasefile;
+	int dhcp_leasefile_dirfd;
+	char *dhcp_leasefile_name;
+	char *dhcp_leasefile_tmp;
+
 	char *dhcp_hostsfile;
 
 	char *ra_piofolder;

@@ -437,30 +437,13 @@ void dhcpv6_ia_write_statefile(void)
 	time_t wall_time = time(NULL);
 	int fd;
 
-	if (!config.dhcp_statefile)
+	if (config.dhcp_leasefile_dirfd < 0 ||
+	    !config.dhcp_leasefile_name ||
+	    !config.dhcp_leasefile_tmp)
 		return;
 
-	size_t statefile_strlen = strlen(config.dhcp_statefile) + 1;
-	size_t tmp_statefile_strlen = statefile_strlen + 1; /* space for . */
-	char *tmp_statefile = alloca(tmp_statefile_strlen);
-
-	char *dir_statefile;
-	char *base_statefile;
-	char *pdir_statefile;
-	char *pbase_statefile;
-
-	dir_statefile = strndup(config.dhcp_statefile, statefile_strlen);
-	base_statefile = strndup(config.dhcp_statefile, statefile_strlen);
-
-	pdir_statefile = dirname(dir_statefile);
-	pbase_statefile = basename(base_statefile);
-
-	snprintf(tmp_statefile, tmp_statefile_strlen, "%s/.%s", pdir_statefile, pbase_statefile);
-
-	free(dir_statefile);
-	free(base_statefile);
-
-	fd = open(tmp_statefile, O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+	fd = openat(config.dhcp_leasefile_dirfd, config.dhcp_leasefile_tmp,
+		    O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0)
 		return;
 
@@ -570,7 +553,8 @@ void dhcpv6_ia_write_statefile(void)
 	uint8_t newmd5[16];
 	md5_end(newmd5, &ctxt.md5);
 
-	rename(tmp_statefile, config.dhcp_statefile);
+	renameat(config.dhcp_leasefile_dirfd, config.dhcp_leasefile_tmp,
+		 config.dhcp_leasefile_dirfd, config.dhcp_leasefile_name);
 
 	if (memcmp(newmd5, statemd5, sizeof(newmd5))) {
 		memcpy(statemd5, newmd5, sizeof(statemd5));

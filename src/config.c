@@ -35,7 +35,10 @@ struct config config = {
 	.legacy = false,
 	.main_dhcpv4 = false,
 	.dhcp_cb = NULL,
-	.dhcp_statefile = NULL,
+	.dhcp_leasefile = NULL,
+	.dhcp_leasefile_dirfd = -1,
+	.dhcp_leasefile_name = NULL,
+	.dhcp_leasefile_tmp = NULL,
 	.dhcp_hostsfile = NULL,
 	.ra_piofolder = NULL,
 	.ra_piofolder_fd = -1,
@@ -393,8 +396,8 @@ static void set_config(struct uci_section *s)
 		config.main_dhcpv4 = blobmsg_get_bool(c);
 
 	if ((c = tb[ODHCPD_ATTR_LEASEFILE])) {
-		free(config.dhcp_statefile);
-		config.dhcp_statefile = strdup(blobmsg_get_string(c));
+		free(config.dhcp_leasefile);
+		config.dhcp_leasefile = strdup(blobmsg_get_string(c));
 	}
 
 	if ((c = tb[ODHCPD_ATTR_HOSTSFILE])) {
@@ -2073,11 +2076,26 @@ void odhcpd_reload(void)
 		ipv6_pxe_dump();
 	}
 
-	if (config.dhcp_statefile) {
-		char *path = strdup(config.dhcp_statefile);
+	if (config.dhcp_leasefile) {
+		char *path = dirname(strdupa(config.dhcp_leasefile));
+		char *name = basename(strdupa(config.dhcp_leasefile));
 
-		mkdir_p(dirname(path), 0755);
-		free(path);
+		mkdir_p(path, 0755);
+
+		close(config.dhcp_leasefile_dirfd);
+		config.dhcp_leasefile_dirfd = open(path, O_PATH | O_DIRECTORY | O_CLOEXEC);
+		if (config.dhcp_leasefile_dirfd < 0)
+			syslog(LOG_ERR, "Unable to open leasefile directory '%s': %m", path);
+
+		free(config.dhcp_leasefile_name);
+		config.dhcp_leasefile_name = strdup(name);
+
+		free(config.dhcp_leasefile_tmp);
+		if (asprintf(&config.dhcp_leasefile_tmp, ".%s", name) < 0)
+			config.dhcp_leasefile_tmp = NULL;
+
+		if (!config.dhcp_leasefile_name || !config.dhcp_leasefile_tmp)
+			syslog(LOG_ERR, "Unable to configure leasefile");
 	}
 
 	if (config.ra_piofolder) {
