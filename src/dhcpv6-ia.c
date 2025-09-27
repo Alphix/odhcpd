@@ -428,25 +428,26 @@ static void dhcpv6_ia_write_hostsfile(time_t now)
 
 void dhcpv6_ia_write_statefile(void)
 {
-	struct write_ctxt ctxt;
-
-	md5_begin(&ctxt.md5);
+	char leasebuf[512];
+	struct write_ctxt ctxt = {
+		.buf = leasebuf,
+		.buf_len = sizeof(leasebuf),
+	};
+	time_t now = odhcpd_time();
+	time_t wall_time = time(NULL);
+	int fd;
 
 	if (!config.dhcp_statefile)
 		return;
 
-	unsigned statefile_strlen = strlen(config.dhcp_statefile) + 1;
-	unsigned tmp_statefile_strlen = statefile_strlen + 1; /* space for . */
+	size_t statefile_strlen = strlen(config.dhcp_statefile) + 1;
+	size_t tmp_statefile_strlen = statefile_strlen + 1; /* space for . */
 	char *tmp_statefile = alloca(tmp_statefile_strlen);
 
 	char *dir_statefile;
 	char *base_statefile;
 	char *pdir_statefile;
 	char *pbase_statefile;
-
-	time_t now = odhcpd_time(), wall_time = time(NULL);
-	int fd, ret;
-	char leasebuf[512];
 
 	dir_statefile = strndup(config.dhcp_statefile, statefile_strlen);
 	base_statefile = strndup(config.dhcp_statefile, statefile_strlen);
@@ -463,13 +464,15 @@ void dhcpv6_ia_write_statefile(void)
 	if (fd < 0)
 		return;
 
-	ret = lockf(fd, F_LOCK, 0);
-	if (ret < 0) {
+	if (lockf(fd, F_LOCK, 0) < 0) {
 		close(fd);
 		return;
 	}
 
-	if (ftruncate(fd, 0) < 0) {}
+	if (ftruncate(fd, 0) < 0) {
+		close(fd);
+		return;
+	}
 
 	ctxt.fp = fdopen(fd, "w");
 	if (!ctxt.fp) {
@@ -477,13 +480,9 @@ void dhcpv6_ia_write_statefile(void)
 		return;
 	}
 
-	ctxt.buf = leasebuf;
-	ctxt.buf_len = sizeof(leasebuf);
+	md5_begin(&ctxt.md5);
 
 	avl_for_each_element(&interfaces, ctxt.iface, avl) {
-		if (ctxt.iface->dhcpv6 != MODE_SERVER &&
-		    ctxt.iface->dhcpv4 != MODE_SERVER)
-			continue;
 
 		if (ctxt.iface->dhcpv6 == MODE_SERVER) {
 			list_for_each_entry(ctxt.c, &ctxt.iface->ia_assignments, head) {
