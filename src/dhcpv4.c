@@ -400,11 +400,12 @@ static struct dhcp_assignment *find_assignment_by_hwaddr(struct interface *iface
 	return NULL;
 }
 
-static struct dhcp_assignment*
+struct dhcp_assignment *
 dhcpv4_lease(struct interface *iface, enum dhcpv4_msg msg, const uint8_t *mac,
 	     const uint32_t reqaddr, uint32_t *leasetime, const char *hostname,
 	     const size_t hostname_len, const bool accept_fr_nonce, bool *incl_fr_opt,
-	     uint32_t *fr_serverid, const uint8_t *reqopts, const size_t reqopts_len)
+	     uint32_t *fr_serverid, const uint8_t *reqopts, const size_t reqopts_len,
+	     bool write_state)
 {
 	struct dhcp_assignment *a = find_assignment_by_hwaddr(iface, mac);
 	struct lease *l = config_find_lease_by_mac(mac);
@@ -547,7 +548,8 @@ dhcpv4_lease(struct interface *iface, enum dhcpv4_msg msg, const uint8_t *mac,
 			a->valid_until = now - 1;
 	}
 
-	dhcpv6_ia_write_state();
+	if (write_state)
+		dhcpv6_ia_write_state();
 
 	return a;
 }
@@ -667,7 +669,7 @@ void dhcpv4_handle_msg(void *addr, void *data, size_t len,
 		a = dhcpv4_lease(iface, reqmsg, req->chaddr, reqaddr,
 				 &leasetime, hostname, hostname_len,
 				 accept_fr_nonce, &incl_fr_opt, &fr_serverid,
-				 reqopts, reqopts_len);
+				 reqopts, reqopts_len, true);
 
 	if (!a) {
 		if (reqmsg == DHCPV4_MSG_REQUEST)

@@ -2188,6 +2188,8 @@ void odhcpd_reload(void)
 
 	uci_unload(uci, dhcp);
 	uci_free_context(uci);
+
+	dhcpv6_ia_read_state();
 }
 
 static void handle_signal(int signal)

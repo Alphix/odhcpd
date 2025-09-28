@@ -523,6 +523,7 @@ int dhcpv6_ia_init(void);
 int dhcpv6_ia_setup_interface(struct interface *iface, bool enable);
 void dhcpv6_ia_enum_addrs(struct interface *iface, struct dhcp_assignment *c, time_t now,
 				dhcpv6_binding_cb_handler_t func, void *arg);
+void dhcpv6_ia_read_state(void);
 void dhcpv6_ia_write_state(void);
 
 int netlink_add_netevent_handler(struct netevent_handler *hdlr);
@@ -552,6 +553,13 @@ int dhcpv4_setup_interface(struct interface *iface, bool enable);
 void dhcpv4_handle_msg(void *addr, void *data, size_t len,
 		       struct interface *iface, _unused void *dest_addr,
 		       send_reply_cb_t send_reply, void *opaque);
+enum dhcpv4_msg;
+struct dhcp_assignment *
+dhcpv4_lease(struct interface *iface, enum dhcpv4_msg msg, const uint8_t *mac,
+	     const uint32_t reqaddr, uint32_t *leasetime, const char *hostname,
+	     const size_t hostname_len, const bool accept_fr_nonce, bool *incl_fr_opt,
+	     uint32_t *fr_serverid, const uint8_t *reqopts, const size_t reqopts_len,
+	     bool write_state);
 #endif
 int router_setup_interface(struct interface *iface, bool enable);
 int dhcpv6_setup_interface(struct interface *iface, bool enable);

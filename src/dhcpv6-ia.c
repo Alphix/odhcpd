@@ -426,6 +426,320 @@ static void dhcpv6_ia_write_hostsfile(time_t now)
 	rename(tmp_hostsfile, config.dhcp_hostsfile);
 }
 
+static bool assign_na(struct interface *iface, struct dhcp_assignment *a);
+
+static bool dhcpv6_ia_recreate_ipv4(struct interface *iface,
+				    uint8_t *hw, size_t hw_len,
+				    const char *hostname, int64_t valid_until,
+				    uint64_t addr, uint8_t addr_len,
+				    time_t wall_time)
+{
+	uint32_t ipaddr;
+	uint32_t leasetime;
+	struct dhcp_assignment *a;
+	bool incl_fr_opt = false;
+	uint32_t fr_serverid;
+
+	if (hw_len != 6 || addr_len != 32 || addr > UINT32_MAX)
+		return false;
+
+	ipaddr = htonl(addr & UINT32_MAX);
+
+	if (valid_until < 0) {
+		/* infinite */
+		leasetime = UINT32_MAX;
+	} else {
+		valid_until -= wall_time;
+		if (valid_until < 0) {
+			fprintf(stderr, "YYY - Expired\n");
+			return false;
+		}
+		leasetime = valid_until > UINT32_MAX ? UINT32_MAX : valid_until;
+	}
+
+	fprintf(stderr, "Valid IPv4 line\n");
+	fprintf(stderr, "\tifname: %s\n", iface->ifname);
+	//fprintf(stderr, "\thwaddr: %s\n", tokens[2]);
+	fprintf(stderr, "\thostname: %s\n", hostname);
+	fprintf(stderr, "\tleasetime: %" PRIu32 "\n", leasetime);
+	//fprintf(stderr, "\tIPv4 addr: %s\n", tokens[8]);
+
+	a = dhcpv4_lease(iface, 3, hw, htonl(ipaddr), &leasetime,
+			 hostname, strlen(hostname), false, &incl_fr_opt,
+			 &fr_serverid, NULL, 0, false);
+	fprintf(stderr, "A is now 0x%p\n", a);
+	fprintf(stderr, "L is now 0x%p\n", a->lease);
+
+	return true;
+}
+
+static bool dhcpv6_ia_recreate_ipv6(struct interface *iface,
+				    uint8_t *duid, size_t duid_len, uint32_t iaid,
+				    const char *hostname, int64_t valid_until,
+				    uint64_t addr, uint8_t addr_len,
+				    time_t wall_time)
+{
+	uint8_t xmac[6];
+	struct lease *l;
+
+	fprintf(stderr, "Valid IPv6 line");
+	fprintf(stderr, "\tifname: %s\n", iface->ifname);
+	//fprintf(stderr, "\tDUID: %s\n", duid);
+	fprintf(stderr, "\tIAID: %08x\n", iaid);
+	fprintf(stderr, "\tHost: %s\n", hostname);
+	fprintf(stderr, "\tValid: %" PRId64 "\n", valid_until);
+	fprintf(stderr, "\tID: %" PRIx64 "\n", addr);
+	fprintf(stderr, "\tLen: %" PRIu8 "\n", addr_len);
+	//fprintf(stderr, "\tOff: %i\n", offset);
+	//fprintf(stderr, "\tRem: %s\n", line + offset);
+
+	if (duid_len == 14 &&
+	    duid[0] == 0 && duid[1] == 1 &&
+	    duid[2] == 0 && duid[3] == 1) {
+		fprintf(stderr, "DUID type DUID-LLT\n");
+		memcpy(xmac, &duid[8], sizeof(xmac));
+	} else if (duid_len == 10 &&
+		   duid[0] == 0 && duid[1] == 3 &&
+		   duid[2] == 0 && duid[3] == 1) {
+		fprintf(stderr, "DUID type DUID-LL\n");
+		memcpy(xmac, &duid[4], sizeof(xmac));
+	}
+
+	fprintf(stderr, "MAC now %02" PRIx8 ":%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8 ":%02" PRIx8 "\n",
+		xmac[0], xmac[1], xmac[2], xmac[3], xmac[4], xmac[5]);
+	l = config_find_lease_by_duid(duid, duid_len);
+	if (l) {
+		fprintf(stderr, "Found a lease by DUID: %p\n", l);
+	} else if (!l) {
+		fprintf(stderr, "Did not find a lease by DUID\n");
+		l = config_find_lease_by_mac(xmac);
+		fprintf(stderr, "Found a lease by MAC: %p\n", l);
+	}
+
+	if (iface->no_dynamic_dhcp && !l && addr_len == 128) {
+		fprintf(stderr, "Skipping, IA_NA, no lease, dynamic DHCP disabled\n");
+		return false;
+	}
+
+	if (!iface->dhcpv6_na) {
+		fprintf(stderr, "Skipping, IA_NA, iface disabled\n");
+		return false;
+	}
+
+	struct dhcp_assignment *a;
+	a = alloc_assignment(duid_len);
+	if (!a) {
+		fprintf(stderr, "Failed to alloc\n");
+		return false;
+	}
+
+	a->clid_len = duid_len;
+	memcpy(a->clid_data, duid, duid_len);
+	a->iaid = htonl(iaid);
+	a->length = addr_len;
+	//a->peer = *addr;
+	/*
+	if (is_na)
+		a->assigned_host_id = l ? l->hostid : 0;
+	else
+		a->assigned_subnet_id = reqhint;
+	*/
+
+	/* SCRATCH
+
+	date +'%s'
+
+	time_t now = odhcpd_time();
+	time_t wall_time = time(NULL);
+	1759066765
+	3517593903
+
+	(ctxt.c->valid_until > now ?
+	 (int64_t)(ctxt.c->valid_until - now + wall_time) :
+	 (INFINITE_VALID(ctxt.c->valid_until) ? -1 : 0)));
+	*/
+	time_t xwall_time = time(NULL);
+	time_t xnow = odhcpd_time();
+	if (valid_until == 0) {
+		/* expired */
+		fprintf(stderr, "YYY - Expired\n");
+		return false;
+	} else if (valid_until == -1) {
+		/* inf */
+		fprintf(stderr, "YYY - Inf\n");
+		a->valid_until = 0;
+		a->preferred_until = 0;
+	} else {
+		int64_t remain = valid_until - xwall_time;
+		fprintf(stderr, "YYY - Remain %" PRIi64 "\n", remain);
+		a->valid_until = xnow + remain;
+		a->preferred_until = a->valid_until;
+	}
+
+	a->assigned_host_id = l ? l->hostid : 0;
+	/*
+	a->valid_until = remain;
+	a->preferred_until = remain;
+	*/
+	a->dhcp_free_cb = dhcpv6_ia_free_assignment;
+	a->iface = iface;
+	//a->flags = (is_pd ? OAF_DHCPV6_PD : OAF_DHCPV6_NA);
+	a->flags = OAF_DHCPV6_NA;
+
+	/*
+	if (first)
+		memcpy(a->key, first->key, sizeof(a->key));
+	else
+		odhcpd_urandom(a->key, sizeof(a->key));
+	*/
+	odhcpd_urandom(a->key, sizeof(a->key));
+
+	/*
+	if (is_pd && iface->dhcpv6_pd)
+		while (!(assigned = assign_pd(iface, a)) &&
+		       !a->managed_size && ++a->length <= 64);
+	else if (is_na && iface->dhcpv6_na)
+		assigned = assign_na(iface, a);
+	*/
+	bool assigned;
+	assigned = assign_na(iface, a);
+
+	fprintf(stderr, "Assigned now %i\n", (int)assigned);
+	if (l && assigned) {
+		a->flags |= OAF_STATIC;
+
+		if (l->hostname)
+			a->hostname = strdup(l->hostname);
+
+		if (l->leasetime)
+			a->leasetime = l->leasetime;
+
+		list_add(&a->lease_list, &l->assignments);
+		a->lease = l;
+	}
+
+	/*
+	if (a->managed_size && !assigned)
+		return -1;
+	*/
+	a->flags &= ~OAF_TENTATIVE;
+	a->flags |= OAF_BOUND;
+	apply_lease(a, true);
+	fprintf(stderr, "LEASE COMPLETE\n");
+	return true;
+}
+
+static bool dhcpv6_ia_parse_leasefile_line(const char *orig_line, time_t wall_time)
+{
+	char *line;
+	char *tokens[9];
+	struct interface *iface = NULL, *tmp_iface;
+	uint8_t clid[130];
+	ssize_t clid_len;
+	bool is_ipv4;
+	uint32_t iaid;
+	int64_t valid_until;
+	uint64_t assigned;
+	uint8_t length;
+	size_t i;
+
+	/*
+	 * IPv4
+	 *   0:"#" 1:<iface> 2:<hwaddr> 3:"ipv4" 4:<hostname> 5:<valid_until> 6:<ipaddr-hex> 7:"32" 8:<ipaddr-str>"/32"
+	 * IPv6
+	 *   0:"#" 1:<iface> 2:<DUID> 3:<IAID> 4:<hostname> 5:<valid_until> 6:<assigned_host_id|assigned_subnet_id> 7:<length> 8:[addr [addr...]]
+	 *
+	 * Note: strtok() because sscanf() would require a bunch of string allocations.
+	 */
+	for (i = 0, line = strdupa(orig_line); i < ARRAY_SIZE(tokens); i++, line = NULL) {
+		char *token = strtok(line, " ");
+		if (!token)
+			break;
+		tokens[i] = token;
+	}
+
+	if (i < ARRAY_SIZE(tokens) || strcmp(tokens[0], "#"))
+		return false;
+
+	avl_for_each_element(&interfaces, tmp_iface, avl) {
+		if (!strcmp(tmp_iface->ifname, tokens[1])) {
+			iface = tmp_iface;
+			break;
+		}
+	}
+
+	if (!iface) {
+		fprintf(stderr, "No matching interface found\n");
+		return false;
+	}
+
+	clid_len = odhcpd_unhexlify(clid, sizeof(clid), tokens[2]);
+	if (clid_len < 0)
+		return false;
+
+	is_ipv4 = !strcmp(tokens[3], "ipv4");
+	if (!is_ipv4) {
+		if (sscanf(tokens[3], "%" SCNx32, &iaid) != 1)
+			return false;
+	}
+
+	if (sscanf(tokens[5], "%" SCNd64, &valid_until) != 1)
+		return false;
+
+	if (sscanf(tokens[6], "%" SCNx64, &assigned) != 1)
+		return false;
+
+	if (sscanf(tokens[7], "%" SCNu8, &length) != 1)
+		return false;
+
+	if (is_ipv4)
+		return dhcpv6_ia_recreate_ipv4(iface, clid, clid_len, tokens[4],
+					       valid_until, assigned, length, wall_time);
+	else
+		return dhcpv6_ia_recreate_ipv6(iface, clid, clid_len, iaid, tokens[4],
+					       valid_until, assigned, length, wall_time);
+}
+
+void dhcpv6_ia_read_state(void)
+{
+	int fd;
+	FILE *fp;
+	char leasebuf[512];
+	char *line;
+	time_t wall_time = time(NULL);
+
+	fprintf(stderr, "XXX - Reading state\n");
+
+	if (config.dhcp_leasefile_dirfd < 0 || !config.dhcp_leasefile_name) {
+		fprintf(stderr, "Bailing\n");
+		return;
+	}
+
+	fd = openat(config.dhcp_leasefile_dirfd, config.dhcp_leasefile,
+		    O_RDONLY | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		fprintf(stderr, "FD 0\n");
+		return;
+	}
+
+	fp = fdopen(fd, "r");
+	if (!fp) {
+		close(fd);
+		return;
+	}
+
+	while ((line = fgets(leasebuf, sizeof(leasebuf), fp))) {
+		if (line[0] != '#')
+			continue;
+		fprintf(stderr, "Line is %s\n", line);
+
+		dhcpv6_ia_parse_leasefile_line(line, wall_time);
+	}
+
+	fclose(fp);
+	dhcpv6_ia_write_state();
+}
+
 void dhcpv6_ia_write_state(void)
 {
 	char leasebuf[512];
@@ -442,6 +756,7 @@ void dhcpv6_ia_write_state(void)
 	    !config.dhcp_leasefile_tmp)
 		return;
 
+	fprintf(stderr, "XXX - Writing state\n");
 	fd = openat(config.dhcp_leasefile_dirfd, config.dhcp_leasefile_tmp,
 		    O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
 	if (fd < 0)
