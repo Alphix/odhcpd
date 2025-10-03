@@ -135,12 +135,6 @@ enum dhcpv4_auth_rkap_ai_type {
 	DHCPV4_AUTH_RKAP_AI_TYPE_MD5_DIGEST	=	2,
 };
 
-struct dhcpv4_option {
-	uint8_t type;
-	uint8_t len;
-	uint8_t data[];
-};
-
 /* DNR */
 struct dhcpv4_dnr {
 	uint16_t len;
