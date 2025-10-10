@@ -183,6 +183,12 @@ enum odhcpd_assignment_flags {
 	OAF_DHCPV6_PD		= (1 << 6),
 };
 
+/* 2-byte type + 128-byte DUID, RFC8415, §11.1 */
+#define DUID_MAX_LEN 130
+/* In theory, 2 (type only), or 7 (DUID-EN + 1-byte data), but be reasonable */
+#define DUID_MIN_LEN 10
+#define DUID_HEXSTRLEN (DUID_MAX_LEN * 2 + 1)
+
 struct config {
 	bool legacy;
 	bool enable_tz;
@@ -198,6 +204,9 @@ struct config {
 	int log_level;
 	bool log_level_cmdline;
 	bool log_syslog;
+
+	uint8_t default_duid[DUID_MAX_LEN];
+	size_t default_duid_len;
 };
 
 struct sys_conf {
@@ -206,10 +215,6 @@ struct sys_conf {
 	uint8_t *tzdb_tz;
 	size_t tzdb_tz_len;
 };
-
-/* 2-byte type + 128-byte DUID, RFC8415, §11.1 */
-#define DUID_MAX_LEN 130
-#define DUID_HEXSTRLEN (DUID_MAX_LEN * 2 + 1)
 
 struct duid {
 	uint8_t len;
