@@ -49,7 +49,13 @@ static struct sock_filter bpf[] = {
 	BPF_STMT(BPF_RET | BPF_K, 0xffffffff),
 	BPF_STMT(BPF_RET | BPF_K, 0),
 };
-static const struct sock_fprog bpf_prog = {sizeof(bpf) / sizeof(*bpf), bpf};
+static const struct sock_fprog bpf_prog = { ARRAY_SIZE(bpf), bpf };
+
+static struct sock_filter bpf_drop_filter[] = {
+	BPF_STMT(BPF_RET | BPF_K, 0),		/* drop everything */
+};
+struct sock_fprog bpf_drop = { ARRAY_SIZE(bpf_drop_filter), bpf_drop_filter };
+
 static struct netevent_handler ndp_netevent_handler = { .cb = ndp_netevent_cb, };
 
 /* Initialize NDP-proxy */
@@ -160,6 +166,24 @@ int ndp_setup_interface(struct interface *iface, bool enable)
 			goto out;
 		}
 
+		/*
+		 * AF_PACKET sockets can receive packets as soon as they are
+		 * created, so make sure we don't accept anything...
+		 */
+		if (setsockopt(iface->ndp_event.uloop.fd, SOL_SOCKET, SO_ATTACH_FILTER,
+				&bpf_drop, sizeof(bpf_drop))) {
+			error("setsockopt(SO_ATTACH_FILTER): %m");
+			ret = -1;
+			goto out;
+		}
+
+		/* ...and remove stray packets... */
+		while (true) {
+			char null[1];
+			if (recv(iface->ndp_event.uloop.fd, null, sizeof(null), MSG_DONTWAIT | MSG_TRUNC) < 0)
+				break;
+		}
+
 #ifdef PACKET_RECV_TYPE
 		int pktt = 1 << PACKET_MULTICAST;
 		if (setsockopt(iface->ndp_event.uloop.fd, SOL_PACKET, PACKET_RECV_TYPE,
@@ -170,6 +194,7 @@ int ndp_setup_interface(struct interface *iface, bool enable)
 		}
 #endif
 
+		/* ...until the real filter is installed */
 		if (setsockopt(iface->ndp_event.uloop.fd, SOL_SOCKET, SO_ATTACH_FILTER,
 				&bpf_prog, sizeof(bpf_prog))) {
 			error("setsockopt(SO_ATTACH_FILTER): %m");
