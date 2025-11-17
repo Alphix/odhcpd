@@ -1367,19 +1367,19 @@ static int dhcpv4_setup_addresses(struct interface *iface)
 	iface->dhcpv4_bcast.s_addr = INADDR_ANY;
 	iface->dhcpv4_mask.s_addr = INADDR_ANY;
 
-	if (!iface->addr4_len) {
+	if (!iface->oaddr4_cnt) {
 		warn("No network(s) available on %s", iface->name);
 		return -1;
 	}
 
-	for (size_t i = 0; i < iface->addr4_len && start && end; i++) {
-		struct in_addr *addr = &iface->addr4[i].addr.in;
+	for (size_t i = 0; i < iface->oaddr4_cnt && start && end; i++) {
+		struct in_addr *addr = &iface->oaddr4[i].addr.in;
 		struct in_addr mask;
 
 		if (addr_is_fr_ip(iface, addr))
 			continue;
 
-		odhcpd_bitlen2netmask(false, iface->addr4[i].prefix_len, &mask);
+		odhcpd_bitlen2netmask(false, iface->oaddr4[i].prefix_len, &mask);
 		if ((start & ntohl(~mask.s_addr)) == start &&
 				(end & ntohl(~mask.s_addr)) == end &&
 				end < ntohl(~mask.s_addr)) {	/* Exclude broadcast address */
@@ -1388,22 +1388,22 @@ static int dhcpv4_setup_addresses(struct interface *iface)
 			iface->dhcpv4_end_ip.s_addr = htonl(end) |
 							(addr->s_addr & mask.s_addr);
 			iface->dhcpv4_local = *addr;
-			iface->dhcpv4_bcast = iface->addr4[i].broadcast;
+			iface->dhcpv4_bcast = iface->oaddr4[i].broadcast;
 			iface->dhcpv4_mask = mask;
 			return 0;
 		}
 	}
 
 	/* Don't allocate IP range for subnets smaller than /28 */
-	if (iface->addr4[0].prefix_len > MAX_PREFIX_LEN) {
+	if (iface->oaddr4[0].prefix_len > MAX_PREFIX_LEN) {
 		warn("Auto allocation of DHCP range fails on %s (prefix length must be < %d).",
 		     iface->name, MAX_PREFIX_LEN + 1);
 		return -1;
 	}
 
-	iface->dhcpv4_local = iface->addr4[0].addr.in;
-	iface->dhcpv4_bcast = iface->addr4[0].broadcast;
-	odhcpd_bitlen2netmask(false, iface->addr4[0].prefix_len, &iface->dhcpv4_mask);
+	iface->dhcpv4_local = iface->oaddr4[0].addr.in;
+	iface->dhcpv4_bcast = iface->oaddr4[0].broadcast;
+	odhcpd_bitlen2netmask(false, iface->oaddr4[0].prefix_len, &iface->dhcpv4_mask);
 	end = start = iface->dhcpv4_local.s_addr & iface->dhcpv4_mask.s_addr;
 
 	/* Auto allocate ranges */
