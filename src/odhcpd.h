@@ -446,7 +446,7 @@ struct interface {
 	uint32_t dhcpv4_pool_end;	// Offset to last dynamic address
 	struct in_addr dhcpv4_start_ip;
 	struct in_addr dhcpv4_end_ip;
-	struct in_addr dhcpv4_local;
+	struct odhcpd_ipaddr dhcpv4_local;
 	struct in_addr dhcpv4_bcast;
 	struct in_addr dhcpv4_mask;
 	struct in_addr *dhcpv4_router;

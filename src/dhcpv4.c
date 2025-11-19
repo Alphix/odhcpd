@@ -76,26 +76,30 @@ static bool addr_is_fr_ip(struct interface *iface, struct in_addr *addr)
 	return false;
 }
 
-static bool leases_require_fr(struct interface *iface, struct odhcpd_ipaddr *addr,
-			      uint32_t mask)
+static bool leases_require_fr(struct interface *iface, struct odhcpd_ipaddr *oaddr)
 {
 	struct dhcpv4_lease *lease = NULL;
 	struct odhcpd_ref_ip *fr_ip = NULL;
 
 	avl_for_each_element(&iface->dhcpv4_leases, lease, iface_avl) {
-		if ((lease->accept_fr_nonce || iface->dhcpv4_forcereconf) &&
-		    !lease->fr_ip &&
-		    ((lease->ipv4.s_addr & mask) == (addr->addr.in.s_addr & mask))) {
-			if (!fr_ip) {
-				fr_ip = calloc(1, sizeof(*fr_ip));
-				if (!fr_ip)
-					break;
+		if (!lease->accept_fr_nonce && !iface->dhcpv4_forcereconf)
+			continue;
 
-				list_add(&fr_ip->head, &iface->dhcpv4_fr_ips);
-				fr_ip->addr = *addr;
-			}
-			inc_ref_cnt_ip(&lease->fr_ip, fr_ip);
+		if (lease->fr_ip)
+			continue;
+
+		if ((lease->ipv4.s_addr & oaddr->netmask) != (oaddr->addr.in.s_addr & oaddr->netmask))
+			continue;
+
+		if (!fr_ip) {
+			fr_ip = calloc(1, sizeof(*fr_ip));
+			if (!fr_ip)
+				break;
+
+			list_add(&fr_ip->head, &iface->dhcpv4_fr_ips);
+			fr_ip->addr = *oaddr;
 		}
+		inc_ref_cnt_ip(&lease->fr_ip, fr_ip);
 	}
 
 	return fr_ip ? true : false;
@@ -816,7 +820,7 @@ void dhcpv4_handle_msg(void *src_addr, void *data, size_t len,
 		.flags = req->flags,
 		.ciaddr = { INADDR_ANY },
 		.yiaddr = { INADDR_ANY },
-		.siaddr = iface->dhcpv4_local,
+		.siaddr = iface->dhcpv4_local.addr.in,
 		.giaddr = req->giaddr,
 		.chaddr = { 0 },
 		.sname = { 0 },
@@ -831,7 +835,7 @@ void dhcpv4_handle_msg(void *src_addr, void *data, size_t len,
 	struct dhcpv4_option_u32 reply_serverid = {
 		.code = DHCPV4_OPT_SERVERID,
 		.len = sizeof(struct in_addr),
-		.data = iface->dhcpv4_local.s_addr,
+		.data = iface->dhcpv4_local.addr.in.s_addr,
 	};
 	struct dhcpv4_option reply_clientid = {
 		.code = DHCPV4_OPT_CLIENTID,
@@ -1361,7 +1365,7 @@ static bool dhcpv4_setup_addresses(struct interface *iface)
 
 	iface->dhcpv4_start_ip.s_addr = INADDR_ANY;
 	iface->dhcpv4_end_ip.s_addr = INADDR_ANY;
-	iface->dhcpv4_local.s_addr = INADDR_ANY;
+	iface->dhcpv4_local = (struct odhcpd_ipaddr){ .addr.in.s_addr = INADDR_ANY };
 	iface->dhcpv4_bcast.s_addr = INADDR_ANY;
 	iface->dhcpv4_mask.s_addr = INADDR_ANY;
 
@@ -1369,7 +1373,7 @@ static bool dhcpv4_setup_addresses(struct interface *iface)
 		if (!iface->oaddr4_cnt)
 			goto error;
 
-		iface->dhcpv4_local.s_addr = iface->oaddr4[0].addr.in.s_addr;
+		iface->dhcpv4_local = iface->oaddr4[0];
 		iface->dhcpv4_bcast = iface->oaddr4[0].broadcast;
 		iface->dhcpv4_mask.s_addr = iface->oaddr4[0].netmask;
 
@@ -1429,7 +1433,7 @@ static bool dhcpv4_setup_addresses(struct interface *iface)
 
 		iface->dhcpv4_start_ip.s_addr = (oaddr->addr.in.s_addr & oaddr->netmask) | htonl(pool_start);
 		iface->dhcpv4_end_ip.s_addr = (oaddr->addr.in.s_addr & oaddr->netmask) | htonl(pool_end);
-		iface->dhcpv4_local.s_addr = oaddr->addr.in.s_addr;
+		iface->dhcpv4_local = *oaddr;
 		iface->dhcpv4_bcast = oaddr->broadcast;
 		iface->dhcpv4_mask.s_addr = oaddr->netmask;
 
@@ -1546,26 +1550,23 @@ out:
 
 static void dhcpv4_addrlist_change(struct interface *iface)
 {
-	struct odhcpd_ipaddr ip;
+	struct odhcpd_ipaddr ip = iface->dhcpv4_local;
 	struct odhcpd_ref_ip *a;
 	struct dhcpv4_lease *lease;
-	uint32_t mask = iface->dhcpv4_mask.s_addr;
-
-	memset(&ip, 0, sizeof(ip));
-	ip.addr.in = iface->dhcpv4_local;
-	ip.prefix_len = odhcpd_netmask2bitlen(false, &iface->dhcpv4_mask);
-	ip.broadcast = iface->dhcpv4_bcast;
 
 	dhcpv4_setup_addresses(iface);
 
-	if ((ip.addr.in.s_addr & mask) ==
-	    (iface->dhcpv4_local.s_addr & iface->dhcpv4_mask.s_addr))
+	if ((ip.addr.in.s_addr & ip.netmask) ==
+	    (iface->dhcpv4_local.addr.in.s_addr & iface->dhcpv4_local.netmask))
 		return;
 
-	if (ip.addr.in.s_addr && !leases_require_fr(iface, &ip, mask))
+	if (ip.addr.in.s_addr && !leases_require_fr(iface, &ip))
 		return;
 
-	if (iface->dhcpv4_local.s_addr == INADDR_ANY || list_empty(&iface->dhcpv4_fr_ips))
+	if (iface->dhcpv4_local.addr.in.s_addr == INADDR_ANY)
+		return;
+
+	if (list_empty(&iface->dhcpv4_fr_ips))
 		return;
 
 	a = list_first_entry(&iface->dhcpv4_fr_ips, struct odhcpd_ref_ip, head);
