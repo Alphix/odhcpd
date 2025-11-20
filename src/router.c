@@ -834,9 +834,9 @@ static int send_router_advert(struct interface *iface, const struct in6_addr *fr
 	/* DNS options */
 	if (iface->ra_dns) {
 		struct in6_addr *dns_addrs6 = NULL, dns_addr6;
-		size_t dns_addrs6_cnt = 0, search_len = iface->search_len;
-		uint8_t *search_domain = iface->search;
-		uint8_t search_buf[256];
+		size_t dns_addrs6_cnt = 0, dns_search_len = iface->dns_search_len;
+		uint8_t *dns_search = iface->dns_search;
+		uint8_t dns_search_buf[DNS_MAX_NAME_LEN];
 
 		/* DNS Recursive DNS aka RDNSS Type 25; RFC8106 */
 		if (iface->dns_addrs6_cnt > 0) {
@@ -858,28 +858,27 @@ static int send_router_advert(struct interface *iface, const struct in6_addr *fr
 			memcpy(dns->addr, dns_addrs6, dns_addrs6_cnt * sizeof(*dns_addrs6));
 		}
 
-		/* DNS Search options aka DNSSL Type 31; RFC8106 */
-		if (!search_domain && !res_init() && _res.dnsrch[0] && _res.dnsrch[0][0]) {
-			int len = dn_comp(_res.dnsrch[0], search_buf,
-					sizeof(search_buf), NULL, NULL);
+		/* DNS Search List option aka DNSSL Type 31; RFC8106, §5.2 */
+		if (!dns_search && !res_init() && _res.dnsrch[0] && _res.dnsrch[0][0]) {
+			int len = dn_comp(_res.dnsrch[0], dns_search_buf,
+					sizeof(dns_search_buf), NULL, NULL);
 			if (len > 0) {
-				search_domain = search_buf;
-				search_len = len;
+				dns_search = dns_search_buf;
+				dns_search_len = len;
 			}
 		}
 
-		if (search_len > 0) {
-			size_t search_padded = ((search_len + 7) & (~7)) + 8;
+		if (dns_search_len > 0) {
+			size_t search_padded = ((dns_search_len + 7) & (~7)) + 8;
 
 			search_sz = sizeof(*search) + search_padded;
 
 			search = alloca(search_sz);
 			memset(search, 0, search_sz);
 			search->type = ND_OPT_DNS_SEARCH;
-			search->len = search_len ? ((sizeof(*search) + search_padded) / 8) : 0;
+			search->len = search_sz / 8;
 			search->lifetime = htonl(highest_found_lifetime);
-			memcpy(search->name, search_domain, search_len);
-			memset(&search->name[search_len], 0, search_padded - search_len);
+			memcpy(search->name, dns_search, dns_search_len);
 		}
 	}
 
