@@ -1145,9 +1145,9 @@ void dhcpv4_handle_msg(void *src_addr, void *data, size_t len,
 			break;
 
 		case DHCPV4_OPT_BROADCAST:
-			if (!lease || iface->dhcpv4_bcast.s_addr == INADDR_ANY)
+			if (!lease || iface->dhcpv4_local.broadcast.s_addr == INADDR_ANY)
 				break;
-			reply_broadcast.data = iface->dhcpv4_bcast.s_addr;
+			reply_broadcast.data = iface->dhcpv4_local.broadcast.s_addr;
 			iov[IOV_BROADCAST].iov_len = sizeof(reply_broadcast);
 			break;
 
@@ -1366,15 +1366,12 @@ static bool dhcpv4_setup_addresses(struct interface *iface)
 	iface->dhcpv4_start_ip.s_addr = INADDR_ANY;
 	iface->dhcpv4_end_ip.s_addr = INADDR_ANY;
 	iface->dhcpv4_local = (struct odhcpd_ipaddr){ .addr.in.s_addr = INADDR_ANY };
-	iface->dhcpv4_bcast.s_addr = INADDR_ANY;
 
 	if (iface->no_dynamic_dhcp) {
 		if (!iface->oaddr4_cnt)
 			goto error;
 
 		iface->dhcpv4_local = iface->oaddr4[0];
-		iface->dhcpv4_bcast = iface->oaddr4[0].broadcast;
-
 		info("DHCPv4: providing static leases on interface '%s'", iface->name);
 		return true;
 	}
@@ -1432,7 +1429,6 @@ static bool dhcpv4_setup_addresses(struct interface *iface)
 		iface->dhcpv4_start_ip.s_addr = (oaddr->addr.in.s_addr & oaddr->netmask) | htonl(pool_start);
 		iface->dhcpv4_end_ip.s_addr = (oaddr->addr.in.s_addr & oaddr->netmask) | htonl(pool_end);
 		iface->dhcpv4_local = *oaddr;
-		iface->dhcpv4_bcast = oaddr->broadcast;
 
 		info("DHCPv4: providing dynamic/static leases on interface '%s', pool: %s - %s", iface->name,
 		     inet_ntop(AF_INET, &iface->dhcpv4_start_ip, pool_start_str, sizeof(pool_start_str)),
