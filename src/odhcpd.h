@@ -448,7 +448,6 @@ struct interface {
 	struct in_addr dhcpv4_end_ip;
 	struct odhcpd_ipaddr dhcpv4_local;
 	struct in_addr dhcpv4_bcast;
-	struct in_addr dhcpv4_mask;
 	struct in_addr *dhcpv4_router;
 	size_t dhcpv4_router_cnt;
 	struct in_addr *dhcpv4_dns;
