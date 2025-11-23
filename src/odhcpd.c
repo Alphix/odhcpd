@@ -807,14 +807,13 @@ bool odhcpd_bitlen2netmask(bool inet6, unsigned int bits, void *mask)
 	return true;
 }
 
-bool odhcpd_valid_hostname(const char *name)
+bool odhcpd_hostname_valid(const char *name)
 {
-#define MAX_LABEL	63
 	const char *c, *label, *label_end;
 	int label_sz = 0;
 
 	for (c = name, label_sz = 0, label = name, label_end = name + strcspn(name, ".") - 1;
-			*c && label_sz <= MAX_LABEL; c++) {
+			*c && label_sz <= DNS_MAX_LABEL_LEN; c++) {
 		if ((*c >= '0' && *c <= '9') ||
 		    (*c >= 'A' && *c <= 'Z') ||
 		    (*c >= 'a' && *c <= 'z')) {
@@ -822,6 +821,7 @@ bool odhcpd_valid_hostname(const char *name)
 			continue;
 		}
 
+		/* FIXME: underscore is not allowed in RFC 1035, RFC 1123? */
 		if ((*c == '_' || *c == '-') && c != label && c != label_end) {
 			label_sz++;
 			continue;
@@ -839,5 +839,5 @@ bool odhcpd_valid_hostname(const char *name)
 		return false;
 	}
 
-	return (label_sz && label_sz <= MAX_LABEL ? true : false);
+	return (label_sz && label_sz <= DNS_MAX_LABEL_LEN ? true : false);
 }

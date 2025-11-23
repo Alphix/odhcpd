@@ -1240,11 +1240,7 @@ proceed:
 					if (a->hostname) {
 						memcpy(a->hostname, hostname, hostname_len);
 						a->hostname[hostname_len] = 0;
-
-						if (odhcpd_valid_hostname(a->hostname))
-							a->flags &= ~OAF_BROKEN_HOSTNAME;
-						else
-							a->flags |= OAF_BROKEN_HOSTNAME;
+						a->hostname_valid = odhcpd_hostname_valid(a->hostname);
 					}
 				}
 				a->accept_fr_nonce = accept_reconf;

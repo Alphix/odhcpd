@@ -671,8 +671,11 @@ int config_set_lease_cfg_from_blobmsg(struct blob_attr *ba)
 	}
 
 	if ((c = tb[LEASE_CFG_ATTR_NAME])) {
+		if (!odhcpd_hostname_valid(blobmsg_get_string(c)))
+			goto err;
+
 		lease_cfg->hostname = strdup(blobmsg_get_string(c));
-		if (!lease_cfg->hostname || !odhcpd_valid_hostname(lease_cfg->hostname))
+		if (!lease_cfg->hostname)
 			goto err;
 	}
 

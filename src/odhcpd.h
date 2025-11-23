@@ -190,9 +190,8 @@ enum odhcpd_assignment_flags {
 	OAF_TENTATIVE		= (1 << 0),
 	OAF_BOUND		= (1 << 1),
 	OAF_STATIC		= (1 << 2),
-	OAF_BROKEN_HOSTNAME	= (1 << 3),
-	OAF_DHCPV6_NA		= (1 << 4),
-	OAF_DHCPV6_PD		= (1 << 5),
+	OAF_DHCPV6_NA		= (1 << 3),
+	OAF_DHCPV6_PD		= (1 << 4),
 };
 
 /* 2-byte type + 128-byte DUID, RFC8415, §11.1 */
@@ -257,6 +256,7 @@ struct dhcpv4_lease {
 	unsigned int flags;			// OAF_*
 	time_t valid_until;			// CLOCK_MONOTONIC time, 0 = inf
 	char *hostname;				// client hostname
+	bool hostname_valid;			// is the hostname one or more valid DNS labels?
 	size_t hwaddr_len;			// hwaddr length
 	uint8_t hwaddr[ETH_ALEN];		// hwaddr (only MAC supported)
 
@@ -299,6 +299,7 @@ struct dhcpv6_lease {
 	unsigned int flags;
 	uint32_t leasetime;
 	char *hostname;
+	bool hostname_valid;			// is the hostname one or more valid DNS labels?
 
 	uint32_t iaid;
 	uint16_t duid_len;
@@ -565,7 +566,7 @@ void odhcpd_enum_addr6(struct interface *iface, struct dhcpv6_lease *lease,
 int odhcpd_parse_addr6_prefix(const char *str, struct in6_addr *addr, uint8_t *prefix);
 int odhcpd_netmask2bitlen(bool v6, void *mask);
 bool odhcpd_bitlen2netmask(bool v6, unsigned int bits, void *mask);
-bool odhcpd_valid_hostname(const char *name);
+bool odhcpd_hostname_valid(const char *name);
 
 int config_parse_interface(void *data, size_t len, const char *iname, bool overwrite);
 struct lease_cfg *config_find_lease_cfg_by_duid_and_iaid(const uint8_t *duid,
