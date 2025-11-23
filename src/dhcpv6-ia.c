@@ -1168,8 +1168,6 @@ proceed:
 							assigned = assign_na(iface, a);
 
 						if (lease_cfg && assigned) {
-							a->flags |= OAF_STATIC;
-
 							if (lease_cfg->hostname)
 								a->hostname = strdup(lease_cfg->hostname);
 
@@ -1235,7 +1233,7 @@ proceed:
 				   ((hdr->msg_type == DHCPV6_MSG_SOLICIT && rapid_commit) ||
 				    hdr->msg_type == DHCPV6_MSG_REQUEST ||
 				    hdr->msg_type == DHCPV6_MSG_REBIND)) {
-				if ((!(a->flags & OAF_STATIC) || !a->hostname) && hostname_len > 0) {
+				if (hostname_len > 0 && (!a->lease_cfg || !a->lease_cfg->hostname)) {
 					a->hostname = realloc(a->hostname, hostname_len + 1);
 					if (a->hostname) {
 						memcpy(a->hostname, hostname, hostname_len);
@@ -1271,7 +1269,7 @@ proceed:
 			} else if ((a->flags & OAF_DHCPV6_NA) && hdr->msg_type == DHCPV6_MSG_DECLINE) {
 				a->flags &= ~OAF_BOUND;
 
-				if (!(a->flags & OAF_STATIC) || a->lease_cfg->hostid != a->assigned_host_id) {
+				if (!a->lease_cfg || a->lease_cfg->hostid != a->assigned_host_id) {
 					memset(a->duid, 0, a->duid_len);
 					a->valid_until = now + 3600; /* Block address for 1h */
 				} else
