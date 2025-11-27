@@ -450,6 +450,8 @@ struct interface {
 	struct in_addr *dhcpv4_dns;
 	size_t dhcpv4_dns_cnt;
 	bool dhcpv4_forcereconf;
+	struct vlist_tree dhcpv4_options;
+	struct vlist_tree dhcpv4_forced_options;
 
 	// DNS
 	struct in6_addr *dns;

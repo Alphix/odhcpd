@@ -20,6 +20,7 @@
 #include <libubox/vlist.h>
 
 #include "odhcpd.h"
+#include "options.h"
 #include "router.h"
 #include "dhcpv6-pxe.h"
 
@@ -110,6 +111,7 @@ enum {
 	IFACE_ATTR_DNS_SERVICE,
 	IFACE_ATTR_DOMAIN,
 	IFACE_ATTR_DHCPV4_FORCERECONF,
+	IFACE_ATTR_DHCPV4_OPTION,
 	IFACE_ATTR_DHCPV6_RAW,
 	IFACE_ATTR_DHCPV6_ASSIGNALL,
 	IFACE_ATTR_DHCPV6_PD_PREFERRED,
@@ -163,6 +165,7 @@ static const struct blobmsg_policy iface_attrs[IFACE_ATTR_MAX] = {
 	[IFACE_ATTR_DNS_SERVICE] = { .name = "dns_service", .type = BLOBMSG_TYPE_BOOL },
 	[IFACE_ATTR_DOMAIN] = { .name = "domain", .type = BLOBMSG_TYPE_ARRAY },
 	[IFACE_ATTR_DHCPV4_FORCERECONF] = { .name = "dhcpv4_forcereconf", .type = BLOBMSG_TYPE_BOOL },
+	[IFACE_ATTR_DHCPV4_OPTION] = { .name = "dhcpv4_option", .type = BLOBMSG_TYPE_ARRAY },
 	[IFACE_ATTR_DHCPV6_RAW] = { .name = "dhcpv6_raw", .type = BLOBMSG_TYPE_STRING },
 	[IFACE_ATTR_DHCPV6_ASSIGNALL] = { .name ="dhcpv6_assignall", .type = BLOBMSG_TYPE_BOOL },
 	[IFACE_ATTR_DHCPV6_PD_PREFERRED] = { .name = "dhcpv6_pd_preferred", .type = BLOBMSG_TYPE_BOOL },
@@ -362,6 +365,7 @@ static void clean_interface(struct interface *iface)
 	free(iface->dnr);
 	free(iface->pios);
 	memset(&iface->ra, 0, sizeof(*iface) - offsetof(struct interface, ra));
+	options_clean_iface(iface);
 	set_interface_defaults(iface);
 }
 
@@ -1115,6 +1119,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		INIT_LIST_HEAD(&iface->ia_assignments);
 		avl_init(&iface->dhcpv4_leases, avl_ipv4_cmp, false, iface);
 		INIT_LIST_HEAD(&iface->dhcpv4_fr_ips);
+		options_init_iface(iface);
 
 		set_interface_defaults(iface);
 
@@ -1404,6 +1409,28 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 
 	if ((c = tb[IFACE_ATTR_DHCPV4_FORCERECONF]))
 		iface->dhcpv4_forcereconf = blobmsg_get_bool(c);
+
+	if ((c = tb[IFACE_ATTR_DHCPV4_OPTION])) {
+		struct blob_attr *cur;
+		unsigned rem;
+
+		blobmsg_for_each_attr(cur, c, rem) {
+			char *opt_str;
+			size_t opt_len;
+
+			if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING || !blobmsg_check_attr(cur, false))
+				continue;
+
+			opt_str = blobmsg_get_string(cur);
+			opt_len = blobmsg_data_len(cur);
+
+			fprintf(stderr, "Got a DHCPv4 opt (%zu bytes): %s\n",
+				opt_len, opt_str);
+
+			options_add_dhcpv4_iface(opt_str, opt_len, iface);
+
+		}
+	}
 
 	if ((c = tb[IFACE_ATTR_DHCPV6_RAW])) {
 		iface->dhcpv6_raw_len = blobmsg_data_len(c) / 2;
