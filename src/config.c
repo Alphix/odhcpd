@@ -307,6 +307,7 @@ static const char *svc_param_key_names[DNR_SVC_MAX] = {
 
 static void set_interface_defaults(struct interface *iface)
 {
+	debug("XXX - setting interface defaults");
 	iface->ignore = true;
 	iface->dhcpv4 = MODE_DISABLED;
 	iface->dhcpv6 = MODE_DISABLED;
@@ -344,6 +345,7 @@ static void set_interface_defaults(struct interface *iface)
 
 static void clean_interface(struct interface *iface)
 {
+	debug("XXX - clean_interface");
 	free(iface->dns_addrs4);
 	free(iface->dns_addrs6);
 	free(iface->dns_search);

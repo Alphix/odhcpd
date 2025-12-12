@@ -1114,6 +1114,7 @@ void dhcpv4_handle_msg(void *src_addr, void *data, size_t len,
 			break;
 
 		case DHCPV4_OPT_DNSSERVER:
+			debug("XXX - %s - iface->dns_addrs4_cnt is %zu", __func__, iface->dns_addrs4_cnt);
 			iov[IOV_DNSSERVER].iov_len = sizeof(reply_dnsserver);
 			if (iface->dns_addrs4_cnt) {
 				reply_dnsserver.len = iface->dns_addrs4_cnt * sizeof(*iface->dns_addrs4);
