@@ -1357,6 +1357,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 
 			if (inet_pton(AF_INET, blobmsg_get_string(cur), &addr4) == 1) {
 				debug("XXX - got DNS IPv4 addr for iface %s", iface->ifname);
+				debug("XXX - dns_addrs4_cnt for iface %s is %zu", iface->ifname, iface->dns_addrs4_cnt);
 				if (addr4.s_addr == INADDR_ANY) {
 					error("Invalid %s value configured for interface '%s'",
 					      iface_attrs[IFACE_ATTR_DNS].name, iface->name);
