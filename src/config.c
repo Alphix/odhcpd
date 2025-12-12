@@ -1112,6 +1112,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		return -1;
 
 	iface = avl_find_element(&interfaces, name, iface, avl);
+	debug("XXX - in %s, name %s, iface 0x%p", __func__, name, iface);
 	if (!iface) {
 		char *new_name;
 
