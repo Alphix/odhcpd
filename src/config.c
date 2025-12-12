@@ -1347,6 +1347,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 		unsigned rem;
 
 		iface->always_rewrite_dns = true;
+		debug("XXX - getting DNS addr for iface %s", iface->ifname);
 		blobmsg_for_each_attr(cur, c, rem) {
 			struct in_addr addr4, *tmp4;
 			struct in6_addr addr6, *tmp6;
@@ -1355,6 +1356,7 @@ int config_parse_interface(void *data, size_t len, const char *name, bool overwr
 				continue;
 
 			if (inet_pton(AF_INET, blobmsg_get_string(cur), &addr4) == 1) {
+				debug("XXX - got DNS IPv4 addr for iface %s", iface->ifname);
 				if (addr4.s_addr == INADDR_ANY) {
 					error("Invalid %s value configured for interface '%s'",
 					      iface_attrs[IFACE_ATTR_DNS].name, iface->name);
