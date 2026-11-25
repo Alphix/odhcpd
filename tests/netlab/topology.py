@@ -19,6 +19,10 @@ NETWORKS = ['wan', 'guest', 'lan', 'sublan']
 # nodes that forward between their interfaces
 ROUTERS = ['router', 'relay']
 
+# isp's stand-in for the rest of the internet: a dummy device with the default routes (without
+# a default route, odhcpd announces a router lifetime of 0)
+UPSTREAM = {'node': 'isp', 'device': 'internet'}
+
 # the bridge in each network's namespace; its ports are named after the member nodes
 BRIDGE = 'br'
 

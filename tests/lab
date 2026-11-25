@@ -55,50 +55,94 @@ def cmd_status(args):
     print(Lab(args.name).status())
 
 
+USAGE_TARGET = """\
+node/network commands:
+  <node> shell | exec <cmd...> | log [-f]            any node (shell/exec also for networks)
+  <odhcpd node> ubus <args...> | reload | restart | config
+  <client node> renew | release | restart [4|6]       udhcpc (4) and/or odhcp6c (6)
+  router wan|wan6 renew | release | restart | log     the router's uplink clients
+  isp prefix-change                                   delegate from the other PD pool
+  <network> capture [tcpdump args...]                 tcpdump on the network's bridge
+  clients renew | release | restart [4|6]             all three client nodes
+  servers log [-f]                                    isp, router and relay odhcpd logs
+"""
+
+
+def follow_or_print(logs, follow, tag=False):
+    if not logs:
+        sys.exit('tests/lab: no logs yet')
+    if follow:
+        os.execvp('tail', ['tail', '-n', '20', '-F'] + [str(l) for l in logs])
+    for l in logs:
+        print(f'==> {l.parent.name}/{l.name} <==' if tag else f'==> {l.name} <==')
+        print(l.read_text(), end='')
+
+
 def target_cmd(name, argv):
-    """tests/lab [--name N] <node|network> <command> [args]"""
-    targets = list(NODES) + NETWORKS
-    p = argparse.ArgumentParser(prog=f'tests/lab {argv[0]}')
-    p.add_argument('command', choices=['shell', 'log', 'exec', 'ubus', 'reload', 'restart', 'config'])
-    p.add_argument('-f', '--follow', action='store_true', help='log: keep following')
-    p.add_argument('args', nargs=argparse.REMAINDER)
-    a = p.parse_args(argv[1:])
+    """tests/lab [--name N] <node|network|group> <command> [args]"""
     lab = Lab(name)
-    target = argv[0]
-    if target not in targets:
-        sys.exit(f'tests/lab: unknown node or network "{target}" ({", ".join(targets)})')
-    odhcpd_cmds = ('ubus', 'reload', 'restart', 'config')
-    if a.command in odhcpd_cmds and NODES.get(target, {}).get('kind') != 'odhcpd':
-        sys.exit(f'tests/lab: {a.command} only applies to odhcpd nodes '
-                 f'({", ".join(n for n, s in NODES.items() if s["kind"] == "odhcpd")})')
-    if a.command == 'shell':
-        lab.shell(target)
-    elif a.command == 'ubus':
+    target, cmd, rest = argv[0], (argv[1] if len(argv) > 1 else None), argv[2:]
+    kind = NODES.get(target, {}).get('kind')
+    paths_env = __import__('netlab.paths').paths.env()
+    if cmd is None or cmd in ('-h', '--help'):
+        sys.exit(USAGE_TARGET)
+
+    if target == 'clients':
+        which = {'4': 'dhcp4', '6': 'dhcp6'}.get(rest[0]) if rest else None
+        for node, spec in NODES.items():
+            if spec['kind'] == 'client':
+                lab.client_action(node, cmd, which)
+        return
+    if target == 'servers':
+        if cmd != 'log':
+            sys.exit(USAGE_TARGET)
+        logs = [lab.dir / n / 'odhcpd.log' for n, s in NODES.items() if s['kind'] == 'odhcpd']
+        return follow_or_print([l for l in logs if l.exists()], '-f' in rest, tag=True)
+
+    if cmd == 'shell':
+        return lab.shell(target)
+    if cmd == 'exec':
         lab.require()
-        os.execvpe('nsenter', lab.argv(target, ['ubus'] + a.args), __import__('netlab.paths').paths.env())
-    elif a.command == 'reload':
-        lab.reload(target)
-    elif a.command == 'restart':
-        lab.restart(target)
-    elif a.command == 'config':
+        os.execvpe('nsenter', lab.argv(target, rest), paths_env)
+    if cmd == 'log':
+        return follow_or_print(lab.logs(target), '-f' in rest)
+    if target in NETWORKS:
+        if cmd != 'capture':
+            sys.exit(USAGE_TARGET)
+        lab.require()
+        # tcpdump would switch to its own user, which doesn't exist in the lab
+        os.execvpe('nsenter', lab.argv(target, ['tcpdump', '-Z', 'root', '-i', 'br', '-n', '-l']
+                                       + (rest or ['-vv'])), paths_env)
+
+    if kind == 'odhcpd' and cmd in ('ubus', 'reload', 'restart', 'config'):
+        if cmd == 'ubus':
+            lab.require()
+            os.execvpe('nsenter', lab.argv(target, ['ubus'] + rest), paths_env)
+        if cmd == 'reload':
+            return lab.reload(target)
+        if cmd == 'restart':
+            return lab.restart(target)
         lab.require()
         cfg = lab.dir / target / 'cfg' / 'dhcp'
         editor = os.environ.get('VISUAL') or os.environ.get('EDITOR') or 'vi'
         if subprocess.run([editor, str(cfg)]).returncode == 0:
             lab.reload(target)
             print(f'{target}: odhcpd reloaded')
-    elif a.command == 'exec':
-        lab.require()
-        os.execvpe('nsenter', lab.argv(target, a.args), __import__('netlab.paths').paths.env())
-    elif a.command == 'log':
-        logs = lab.logs(target)
-        if not logs:
-            sys.exit(f'tests/lab: no logs for {target} yet')
-        if a.follow:
-            os.execvp('tail', ['tail', '-n', '20', '-F'] + [str(l) for l in logs])
-        for l in logs:
-            print(f'==> {l.name} <==')
-            print(l.read_text(), end='')
+        return
+    if target == 'isp' and cmd == 'prefix-change':
+        old, new = lab.prefix_change()
+        print(f'isp: PD pool {old} -> {new}')
+        return
+    if target == 'router' and cmd in ('wan', 'wan6'):
+        if not rest:
+            sys.exit(USAGE_TARGET)
+        if rest[0] == 'log':
+            return follow_or_print([lab.dir / 'router' / f'{cmd}.log'], '-f' in rest[1:])
+        return lab.client_action('router', rest[0], cmd)
+    if kind == 'client' and cmd in ('renew', 'release', 'restart'):
+        which = {'4': 'dhcp4', '6': 'dhcp6'}.get(rest[0]) if rest else None
+        return lab.client_action(target, cmd, which)
+    sys.exit(f'tests/lab: "{cmd}" doesn\'t apply to {target}\n\n' + USAGE_TARGET)
 
 
 def main():
@@ -106,7 +150,7 @@ def main():
     name = 'default'
     if len(argv) >= 2 and argv[0] == '--name':
         name, argv = argv[1], argv[2:]
-    if argv and argv[0] in list(NODES) + NETWORKS:
+    if argv and argv[0] in list(NODES) + NETWORKS + ['clients', 'servers']:
         try:
             return target_cmd(name, argv)
         except LabError as e:

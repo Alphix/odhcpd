@@ -5,10 +5,9 @@ A complete home network on your own machine, for testing odhcpd by hand and
 namespace, so it needs no root privileges, no VMs and no OpenWrt image, and it
 builds everything it needs itself.
 
-*Status: under construction. Implemented so far: `tests/lab build`, the network
-(namespaces, bridges, links), the three odhcpd nodes (with ubusd and the netifd
-stand-in) and the commands below. Not yet: the DHCP clients (router uplink and
-the three client nodes).*
+*Status: under construction. Implemented: the whole network with its odhcpd
+nodes and DHCP clients, and the commands below. Not yet: crafted/malformed
+packets (scapy) and the automated tests.*
 
 ## Topology
 
@@ -63,6 +62,18 @@ scripts report their results to it with
 | guest | 192.168.2.0/24 | a /64 of the delegated /56, a /64 of fd00:1::/48 |
 | sublan | (lan's subnet, relayed) | (lan's /64s, relayed) |
 
+## Known issues (in odhcpd, found with the lab)
+
+* The relay node is meant to relay DHCPv4 (`option dhcpv4 'relay'`), which
+  odhcpd doesn't support yet. Instead it runs a DHCPv4 server on `lan` (pool
+  from its own address), competing with the router; `sublan-client` gets no
+  IPv4 address.
+* DHCPv6 through the relay doesn't reach `sublan-client` yet (it gets SLAAC
+  addresses through the relayed RAs, but no DHCPv6 lease). The relay also
+  treats other clients' messages it sees on `lan` as relay replies.
+* isp delegates from an address on its `wan` interface (`2001:db8:100::1/40`),
+  so it also announces `2001:db8:100::/64` as on-link there.
+
 ## Requirements
 
 From your distribution: a C compiler, `cmake`, `make`, `git`, `pkg-config`,
@@ -105,6 +116,22 @@ tests/lab <odhcpd node> reload           # odhcpd rereads its config (SIGHUP)
 tests/lab <odhcpd node> restart          # restart odhcpd
 tests/lab <odhcpd node> config           # edit the node's odhcpd config, then reload
 ```
+
+```
+tests/lab <client node> renew | release | restart [4|6]    udhcpc (4) and/or odhcp6c (6)
+tests/lab router wan|wan6 renew | release | restart | log  the router's uplink clients
+tests/lab isp prefix-change                                isp delegates from its other pool
+tests/lab <network> capture [tcpdump args...]              tcpdump on the network's bridge
+tests/lab clients renew | release | restart [4|6]          all three client nodes
+tests/lab servers log [-f]                                 the three odhcpd logs
+```
+
+`renew` and `release` send SIGUSR1/SIGUSR2 to the clients (both udhcpc and
+odhcp6c renew/release on those). The clients run as on OpenWrt: the router's
+`wan`/`wan6` report to its netifd stand-in, the client nodes' script
+(`tests/scripts/dhcp-client-script`) applies addresses and routes itself; the
+kernel's own SLAAC is off, odhcp6c handles RAs. Their logs are `wan.log`,
+`wan6.log` (router) and `dhcp4.log`, `dhcp6.log` (client nodes).
 
 The odhcpd nodes' configurations come from `tests/configs/<node>/` (`dhcp` is the
 UCI config, `netifd.json` the netifd stand-in's interfaces) and are copied into

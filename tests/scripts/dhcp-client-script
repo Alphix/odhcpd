@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Event script for the lab's DHCP clients (udhcpc -s / odhcp6c -s).
+
+udhcpc calls it as `<script> <event>`, odhcp6c as `<script> <ifname> <event>`, both with the
+lease in the environment. LAB_CLIENT (udhcpc|odhcp6c) says which one.
+
+With LAB_IFACE set (the router's wan/wan6), it reports the result to the node's netifd stand-in
+(`ubus call network.interface update/down`), as netifd's dhcp.script/dhcpv6.script do with
+proto_send_update; the stand-in applies addresses and routes. Without it (the client nodes),
+it applies addresses and routes itself and remembers them in LAB_STATE to remove them later.
+"""
+import json
+import os
+import subprocess
+import sys
+
+
+def say(msg):
+    print(f'script: {msg}', flush=True)
+
+
+def entries(name):
+    """odhcp6c's list variables: 'addr/len,field,field,... addr/len,...'"""
+    out = []
+    for item in os.environ.get(name, '').split():
+        fields = item.split(',')
+        addr, _, length = fields[0].partition('/')
+        out.append((addr, int(length or 128), fields[1:]))
+    return out
+
+
+def v6_update():
+    upd = {'ipv6-address': [], 'ipv6-prefix': [], 'route': []}
+    for name in ('ADDRESSES', 'RA_ADDRESSES'):
+        for addr, length, f in entries(name):
+            if len(f) >= 2 and int(f[1]) > 0:
+                upd['ipv6-address'].append({'address': addr, 'mask': length,
+                                            'preferred': int(f[0]), 'valid': int(f[1])})
+    for addr, length, f in entries('PREFIXES'):
+        if len(f) >= 2 and int(f[1]) > 0:
+            upd['ipv6-prefix'].append({'address': addr, 'mask': length,
+                                       'preferred': int(f[0]), 'valid': int(f[1])})
+    for target, length, f in entries('RA_ROUTES'):
+        # target/len,router,valid,priority; valid 0 = withdrawn
+        if len(f) >= 2 and int(f[1]) > 0:
+            route = {'target': target, 'mask': length}
+            if f[0]:
+                route['nexthop'] = f[0]
+            upd['route'].append(route)
+    return upd
+
+
+def v4_update():
+    upd = {'ipv4-address': [{'address': os.environ['ip'], 'mask': int(os.environ.get('mask', 24))}],
+           'route': []}
+    routers = os.environ.get('router', '').split()
+    if routers:
+        upd['route'].append({'target': '0.0.0.0', 'mask': 0, 'nexthop': routers[0]})
+    return upd
+
+
+def report(iface, upd):
+    """To the netifd stand-in (router uplink)."""
+    if upd is None:
+        cmd = ['ubus', 'call', 'network.interface', 'down', json.dumps({'interface': iface})]
+    else:
+        upd = dict(upd, interface=iface, up=True)
+        cmd = ['ubus', 'call', 'network.interface', 'update', json.dumps(upd)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode:
+        say(f'ubus failed ({r.returncode}): {r.stderr.strip()}')
+
+
+def ip(*args):
+    r = subprocess.run(['ip'] + [str(a) for a in args], capture_output=True, text=True)
+    if r.returncode:
+        say(f'ip {" ".join(str(a) for a in args)}: {r.stderr.strip()}')
+
+
+def apply(dev, family, upd):
+    """Directly on the device (client nodes); upd None removes what was applied before."""
+    state = os.environ.get('LAB_STATE')
+    try:
+        old = json.load(open(state))
+    except (TypeError, FileNotFoundError, ValueError):
+        old = {}
+    key = 'v4' if family == '-4' else 'v6'
+    prev = old.get(key, {})
+    want = upd or {}
+    new_addrs = {f"{a['address']}/{a['mask']}" for a in want.get(f'ipv{key[1]}-address', [])}
+    for a in prev.get('addresses', []):
+        if a not in new_addrs:
+            ip(family, 'addr', 'del', a, 'dev', dev)
+    for a in want.get(f'ipv{key[1]}-address', []):
+        extra = []
+        if 'valid' in a:
+            extra = ['preferred_lft', a['preferred'], 'valid_lft', a['valid']]
+        ip(family, 'addr', 'replace', f"{a['address']}/{a['mask']}", 'dev', dev, *extra)
+    for r in want.get('route', []):
+        target = f"{r['target']}/{r['mask']}"
+        if 'nexthop' in r:
+            ip(family, 'route', 'replace', target, 'via', r['nexthop'], 'dev', dev)
+        else:
+            ip(family, 'route', 'replace', target, 'dev', dev)
+    old[key] = {'addresses': sorted(new_addrs)}
+    if state:
+        with open(state, 'w') as fp:
+            json.dump(old, fp)
+
+
+def main():
+    client = os.environ.get('LAB_CLIENT')
+    iface = os.environ.get('LAB_IFACE')
+    if client == 'udhcpc':
+        event, dev, family = sys.argv[1], os.environ.get('interface'), '-4'
+        upd = v4_update() if event in ('bound', 'renew') else None
+        if event not in ('bound', 'renew', 'deconfig', 'nak', 'leasefail'):
+            return
+        if event in ('nak', 'leasefail'):
+            say(event)
+            return
+    else:
+        dev, event, family = sys.argv[1], sys.argv[2], '-6'
+        if event in ('bound', 'updated', 'rebound', 'ra-updated', 'informed'):
+            upd = v6_update()
+        elif event in ('unbound', 'stopped'):
+            upd = None
+        else:
+            say(event)
+            return
+    say(f'{event}: ' + (json.dumps(upd) if upd is not None else 'down'))
+    if iface:
+        report(iface, upd)
+    else:
+        apply(dev, family, upd)
+
+
+if __name__ == '__main__':
+    main()

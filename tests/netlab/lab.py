@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from .paths import RUN, TESTS, PREFIX, env as prefix_env
-from .topology import ROUTERS
+from .topology import ROUTERS, UPSTREAM
 from .topology import NODES, NETWORKS, BRIDGE
 
 
@@ -86,6 +86,10 @@ class Lab:
             for node, spec in NODES.items():
                 if spec['kind'] == 'odhcpd':
                     self.start_odhcpd_node(node)
+            self.start_uplink()
+            for node, spec in NODES.items():
+                if spec['kind'] == 'client':
+                    self.start_client_node(node)
         except Exception:
             self.down()
             raise
@@ -137,6 +141,12 @@ class Lab:
         if node in ROUTERS:
             for key in ('net/ipv4/ip_forward', 'net/ipv6/conf/all/forwarding'):
                 self.run(node, ['sh', '-c', f'echo 1 > /proc/sys/{key}'])
+        if node == UPSTREAM['node']:
+            dev = UPSTREAM['device']
+            self.run(node, ['ip', 'link', 'add', 'name', dev, 'type', 'dummy'])
+            self.run(node, ['ip', 'link', 'set', 'dev', dev, 'up'])
+            for fam in ('-4', '-6'):
+                self.run(node, ['ip', fam, 'route', 'add', 'default', 'dev', dev])
         self.spawn(node, ['ubusd'], 'ubusd')
         self.wait_for(lambda: self._sock(node), what=f'{node} ubusd')
         self.spawn(node, ['netifd-stub', '-c', str(d / 'netifd.json')], 'netifd')
@@ -150,6 +160,79 @@ class Lab:
         d = self.dir / node
         self.spawn(node, ['odhcpd', '-c', str(d / 'cfg'), '-f', '-l', '7'], 'odhcpd')
         self.run(node, ['ubus', '-t', '10', 'wait_for', 'dhcp'])
+
+    # ---- DHCP clients ---------------------------------------------------------------------------
+    SCRIPT = TESTS / 'scripts' / 'dhcp-client-script'
+
+    def start_udhcpc(self, node, dev, name, iface=None):
+        """busybox udhcpc as OpenWrt's netifd runs it (-R: release on exit)."""
+        env = {'LAB_CLIENT': 'udhcpc', 'LAB_STATE': str(self.dir / node / 'client-state.json')}
+        if iface:
+            env['LAB_IFACE'] = iface
+        self.spawn(node, ['udhcpc', '-f', '-t', '0', '-R', '-i', dev, '-x', f'hostname:{node}',
+                          '-s', str(self.SCRIPT)], name, env=env)
+
+    def start_odhcp6c(self, node, dev, name, iface=None, pd_len=None):
+        env = {'LAB_CLIENT': 'odhcp6c', 'LAB_STATE': str(self.dir / node / 'client-state.json')}
+        if iface:
+            env['LAB_IFACE'] = iface
+        cmd = ['odhcp6c', '-l', '7', '-e', '-s', str(self.SCRIPT)]
+        if pd_len:
+            cmd += ['-P', str(pd_len)]
+        self.spawn(node, cmd + [dev], name, env=env)
+
+    def start_uplink(self):
+        """The router's wan (DHCPv4) and wan6 (DHCPv6 with a /56 PD) clients."""
+        self.start_udhcpc('router', 'wan', 'wan', iface='wan')
+        self.start_odhcp6c('router', 'wan', 'wan6', iface='wan6', pd_len=56)
+
+    def start_client_node(self, node):
+        """udhcpc (dhcp4) and odhcp6c (dhcp6) on the node's eth0; like netifd, the kernel's own
+        SLAAC is off, odhcp6c handles RAs."""
+        self.run(node, ['sh', '-c', 'echo 0 > /proc/sys/net/ipv6/conf/eth0/accept_ra'])
+        self.start_udhcpc(node, 'eth0', 'dhcp4')
+        self.start_odhcp6c(node, 'eth0', 'dhcp6')
+
+    def dhcp_clients(self, node):
+        """Names of a node's DHCP client daemons (wan/wan6 on the router, dhcp4/dhcp6 on clients)."""
+        if node == 'router':
+            return ['wan', 'wan6']
+        if NODES[node]['kind'] == 'client':
+            return ['dhcp4', 'dhcp6']
+        return []
+
+    def client_action(self, node, action, which=None):
+        """renew (SIGUSR1), release (SIGUSR2) or restart a node's DHCP clients (all, or one)."""
+        self.require()
+        names = self.dhcp_clients(node)
+        if which:
+            if which not in names:
+                raise LabError(f'{node} has no client "{which}" ({", ".join(names) or "none"})')
+            names = [which]
+        for name in names:
+            if action == 'renew':
+                self.signal(node, name, signal.SIGUSR1)
+            elif action == 'release':
+                self.signal(node, name, signal.SIGUSR2)
+            elif action == 'restart':
+                self.stop_daemon(node, name)
+                spec = json.loads((self.dir / node / f'{name}.cmd').read_text())
+                self.spawn(node, spec['cmd'], name, env=spec['env'])
+            else:
+                raise LabError(f'unknown client action "{action}"')
+
+    # isp's PD pools: prefix-change moves the delegation to the other one
+    PD_POOLS = ['2001:db8:100::1/40', '2001:db8:200::1/40']
+
+    def prefix_change(self):
+        """isp hands out /56s from the other PD pool (as when an ISP renumbers)."""
+        self.require()
+        have = self.run('isp', ['ip', '-6', '-br', 'addr', 'show', 'dev', 'wan'])
+        old = next(p for p in self.PD_POOLS if p in have)
+        new = self.PD_POOLS[1 - self.PD_POOLS.index(old)]
+        self.run('isp', ['ip', '-6', 'addr', 'add', new, 'dev', 'wan'])
+        self.run('isp', ['ip', '-6', 'addr', 'del', old, 'dev', 'wan'])
+        return old, new
 
     def daemon_pid(self, node, name):
         try:
@@ -210,13 +293,16 @@ class Lab:
             raise LabError(f'{target}: {" ".join(cmd)} failed ({r.returncode}): {r.stderr.strip()}')
         return r.stdout
 
-    def spawn(self, target, cmd, logname):
+    def spawn(self, target, cmd, logname, env=None):
         """Start a long-running program in a node, detached, output into <node>/<logname>.log;
         its pid goes into <node>/<logname>.pid."""
         d = self.dir / target
         log = open(d / f'{logname}.log', 'a')
-        p = subprocess.Popen(self.argv(target, cmd), env=prefix_env(), stdin=subprocess.DEVNULL,
+        e = prefix_env()
+        e.update(env or {})
+        p = subprocess.Popen(self.argv(target, cmd), env=e, stdin=subprocess.DEVNULL,
                              stdout=log, stderr=log, start_new_session=True)
+        (d / f'{logname}.cmd').write_text(json.dumps({'cmd': list(cmd), 'env': env or {}}))
         (d / f'{logname}.pid').write_text(str(p.pid))
         return p.pid
 
