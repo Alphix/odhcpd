@@ -150,3 +150,33 @@ jobs:
           name: odhcpd-native-${{ matrix.variant }}
           path: build/odhcpd-${{ matrix.variant }}/odhcpd
           if-no-files-found: error
+
+  lab:
+    name: Network lab tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout odhcpd
+        uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install cmake pkg-config python3-scapy python3-pytest tcpdump
+
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Build the lab
+        run: tests/lab build
+
+      - name: Run the lab tests
+        run: python3 -m pytest -c tests/pytest.ini tests -v -rxXs
+
+      - name: Upload the lab's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab-run
+          path: |
+            lab/run/
+            lab/build/build.log
