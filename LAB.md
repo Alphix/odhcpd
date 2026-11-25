@@ -5,7 +5,8 @@ A complete home network on your own machine, for testing odhcpd by hand and
 namespace, so it needs no root privileges, no VMs and no OpenWrt image, and it
 builds everything it needs itself.
 
-*Status: under construction. Implemented so far: `tests/lab build`.*
+*Status: under construction. Implemented so far: `tests/lab build`, the network
+(namespaces, bridges, links) and `up`/`down`/`status`/`shell`/`log`/`exec`.*
 
 ## Topology
 
@@ -81,6 +82,30 @@ libnl-tiny, libubox, ubus, uci (as in odhcpd's CI), odhcp6c, busybox with only
 * `--ref NAME=REF`: pin a dependency to a git ref, e.g. `--ref libubox=<sha>`
 * `--only NAME`: build only one component
 * `--clean`: rebuild everything (downloads are kept)
+
+## Using the lab
+
+```
+tests/lab up                     # build if needed, start the lab, show its status
+tests/lab status                 # nodes with their addresses, networks with their members
+tests/lab <node> shell           # a shell in a node (root inside the lab, not on your machine)
+tests/lab <node> exec <cmd...>   # run one command in a node
+tests/lab <node> log [-f]        # the node's logs
+tests/lab down                   # stop the lab (its logs stay in lab/run/<name>/)
+```
+
+Nodes: `isp`, `router`, `relay`, `guest-client`, `lan-client`, `sublan-client`.
+Networks (`shell`/`exec` run in the network's bridge namespace, e.g. for
+captures): `wan`, `guest`, `lan`, `sublan`. `--name NAME` (before the other
+arguments) runs a separate lab; several labs can run at the same time.
+
+How it works: `up` starts an anchor process in a new user namespace (you are
+root inside it, but only for the lab's namespaces) with its own mount and
+network namespace and a private `/run`. Each node and each network gets a
+holder process in its own network, mount and UTS namespace (own `/run`, so its
+own ubusd later, and its own hostname). veth pairs connect the nodes to the
+networks' bridges. Commands join a node with `nsenter`. `down` stops every
+process in the lab's user namespace, which also removes all its namespaces.
 
 ## Work directory
 

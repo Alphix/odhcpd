@@ -4,15 +4,21 @@
 usage: tests/lab build [--clean] [--asan] [--ref NAME=REF ...] [--only NAME ...]
        tests/lab check
        tests/lab clean [--all]
+       tests/lab [--name NAME] up | down | status
+       tests/lab [--name NAME] <node|network> shell | log [-f] | exec <cmd...>
 """
 import argparse
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from netlab import build as labbuild  # noqa: E402
 from netlab.paths import WORK, RUN  # noqa: E402
+from netlab.lab import Lab, LabError  # noqa: E402
+from netlab.topology import NODES, NETWORKS  # noqa: E402
 
 
 def cmd_build(args):
@@ -33,9 +39,69 @@ def cmd_clean(args):
     print(f'removed {target}')
 
 
+def cmd_up(args):
+    if not labbuild.built():
+        labbuild.build()
+    lab = Lab(args.name).up()
+    print(lab.status())
+
+
+def cmd_down(args):
+    Lab(args.name).down()
+
+
+def cmd_status(args):
+    print(Lab(args.name).status())
+
+
+def target_cmd(name, argv):
+    """tests/lab [--name N] <node|network> <command> [args]"""
+    targets = list(NODES) + NETWORKS
+    p = argparse.ArgumentParser(prog=f'tests/lab {argv[0]}')
+    p.add_argument('command', choices=['shell', 'log', 'exec'])
+    p.add_argument('-f', '--follow', action='store_true', help='log: keep following')
+    p.add_argument('args', nargs=argparse.REMAINDER)
+    a = p.parse_args(argv[1:])
+    lab = Lab(name)
+    target = argv[0]
+    if target not in targets:
+        sys.exit(f'tests/lab: unknown node or network "{target}" ({", ".join(targets)})')
+    if a.command == 'shell':
+        lab.shell(target)
+    elif a.command == 'exec':
+        lab.require()
+        os.execvpe('nsenter', lab.argv(target, a.args), __import__('netlab.paths').paths.env())
+    elif a.command == 'log':
+        logs = lab.logs(target)
+        if not logs:
+            sys.exit(f'tests/lab: no logs for {target} yet')
+        if a.follow:
+            os.execvp('tail', ['tail', '-n', '20', '-F'] + [str(l) for l in logs])
+        for l in logs:
+            print(f'==> {l.name} <==')
+            print(l.read_text(), end='')
+
+
 def main():
+    argv = sys.argv[1:]
+    name = 'default'
+    if len(argv) >= 2 and argv[0] == '--name':
+        name, argv = argv[1], argv[2:]
+    if argv and argv[0] in list(NODES) + NETWORKS:
+        try:
+            return target_cmd(name, argv)
+        except LabError as e:
+            sys.exit(f'tests/lab: {e}')
+
     p = argparse.ArgumentParser(prog='tests/lab', description='odhcpd network lab (see LAB.md)')
     sub = p.add_subparsers(dest='cmd', required=True)
+
+    u = sub.add_parser('up', help='start the lab (builds first if needed)')
+    u.set_defaults(func=cmd_up)
+    d = sub.add_parser('down', help='stop the lab (keeps its logs)')
+    d.set_defaults(func=cmd_down)
+    s = sub.add_parser('status', help='nodes, addresses and networks')
+    s.set_defaults(func=cmd_status)
 
     b = sub.add_parser('build', help='build everything the lab needs into the work directory')
     b.add_argument('--clean', action='store_true', help='rebuild from scratch (keeps downloads)')
@@ -52,7 +118,8 @@ def main():
     cl.add_argument('--all', action='store_true')
     cl.set_defaults(func=cmd_clean)
 
-    args = p.parse_args()
+    args = p.parse_args(argv)
+    args.name = name
     try:
         args.func(args)
     except RuntimeError as e:
