@@ -51,6 +51,11 @@ odhcpd uses cmake:
 * To build / install use: `make` / `make install` afterwards.
 * To build DEB or RPM packages use: `make package` afterwards.
 
+## Testing
+
+[LAB.md](LAB.md) describes a local test network (network namespaces, no root
+needed) with odhcpd as ISP stand-in, home router and relay, and real clients.
+
 
 ## Configuration
 

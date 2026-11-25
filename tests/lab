@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""odhcpd network lab: see LAB.md.
+
+usage: tests/lab build [--clean] [--asan] [--ref NAME=REF ...] [--only NAME ...]
+       tests/lab check
+       tests/lab clean [--all]
+"""
+import argparse
+import shutil
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from netlab import build as labbuild  # noqa: E402
+from netlab.paths import WORK, RUN  # noqa: E402
+
+
+def cmd_build(args):
+    refs = dict(r.split('=', 1) for r in args.ref)
+    labbuild.build(refs=refs, clean=args.clean, sanitize=args.asan, only=args.only)
+
+
+def cmd_check(args):
+    missing = labbuild.check_requirements(need_pytest=True)
+    if missing:
+        sys.exit('missing: ' + ', '.join(missing))
+    print('all requirements present; built:', 'yes' if labbuild.built() else 'no (run tests/lab build)')
+
+
+def cmd_clean(args):
+    target = WORK if args.all else RUN
+    shutil.rmtree(target, ignore_errors=True)
+    print(f'removed {target}')
+
+
+def main():
+    p = argparse.ArgumentParser(prog='tests/lab', description='odhcpd network lab (see LAB.md)')
+    sub = p.add_subparsers(dest='cmd', required=True)
+
+    b = sub.add_parser('build', help='build everything the lab needs into the work directory')
+    b.add_argument('--clean', action='store_true', help='rebuild from scratch (keeps downloads)')
+    b.add_argument('--asan', action='store_true', help='build odhcpd with ASan/UBSan')
+    b.add_argument('--ref', action='append', default=[], metavar='NAME=REF',
+                   help='pin a dependency to a git ref, e.g. libubox=<sha>')
+    b.add_argument('--only', action='append', metavar='NAME', help='build only this component')
+    b.set_defaults(func=cmd_build)
+
+    c = sub.add_parser('check', help='check the requirements from the distribution')
+    c.set_defaults(func=cmd_check)
+
+    cl = sub.add_parser('clean', help='remove lab run state (--all: the whole work directory)')
+    cl.add_argument('--all', action='store_true')
+    cl.set_defaults(func=cmd_clean)
+
+    args = p.parse_args()
+    try:
+        args.func(args)
+    except RuntimeError as e:
+        sys.exit(f'tests/lab: {e}')
+
+
+if __name__ == '__main__':
+    main()
