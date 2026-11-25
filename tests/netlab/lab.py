@@ -221,6 +221,38 @@ class Lab:
             else:
                 raise LabError(f'unknown client action "{action}"')
 
+    # ---- crafted packets (tests/netlab/probe.py) -------------------------------------------------
+    def default_dev(self, node):
+        links = list(NODES[node]['links'])
+        return links[0]
+
+    def probe(self, node, kind, steps, dev=None, timeout=60):
+        """Crafted exchanges from a node (see probe.py for the step syntax); returns the decoded
+        results, one dict per step. The exchange is saved as <node>/probe-<time>.pcap."""
+        dev = dev or self.default_dev(node)
+        pcap = self.dir / node / f'probe-{time.strftime("%H%M%S")}-{kind}.pcap'
+        out = self.run(node, [sys.executable, str(TESTS / 'netlab' / 'probe.py'), dev, str(pcap),
+                              kind] + list(steps), timeout=timeout)
+        return [json.loads(line) for line in out.splitlines() if line.startswith('{')]
+
+    def odhcpd_alive(self):
+        """{node: bool} for the odhcpd nodes."""
+        return {n: self.daemon_pid(n, 'odhcpd') is not None
+                for n, s in NODES.items() if s['kind'] == 'odhcpd'}
+
+    def fuzz(self, node, kind, count, seed=1, dev=None):
+        """count seeded mutations of valid messages from a node, then check that every odhcpd is
+        still running and that a normal exchange from the node still gets an answer."""
+        dev = dev or self.default_dev(node)
+        res = self.run(node, [sys.executable, str(TESTS / 'netlab' / 'probe.py'), dev, '',
+                              'fuzz', kind, str(count), str(seed)], timeout=600)
+        result = json.loads(res.strip().splitlines()[-1])
+        time.sleep(1)
+        result['alive'] = self.odhcpd_alive()
+        check = {'dhcp6': ['sol:rc,na=1'], 'dhcp4': ['disc'], 'rs': ['rs']}[kind]
+        result['answered'] = bool(self.probe(node, kind, check, dev=dev)[0]['replies'])
+        return result
+
     # isp's PD pools: prefix-change moves the delegation to the other one
     PD_POOLS = ['2001:db8:100::1/40', '2001:db8:200::1/40']
 

@@ -6,8 +6,8 @@ namespace, so it needs no root privileges, no VMs and no OpenWrt image, and it
 builds everything it needs itself.
 
 *Status: under construction. Implemented: the whole network with its odhcpd
-nodes and DHCP clients, and the commands below. Not yet: crafted/malformed
-packets (scapy) and the automated tests.*
+nodes and DHCP clients, crafted/malformed packets and the commands below. Not
+yet: the automated tests.*
 
 ## Topology
 
@@ -61,6 +61,33 @@ scripts report their results to it with
 | lan | 192.168.1.0/24 | a /64 of the delegated /56, a /64 of fd00:1::/48 |
 | guest | 192.168.2.0/24 | a /64 of the delegated /56, a /64 of fd00:1::/48 |
 | sublan | (lan's subnet, relayed) | (lan's /64s, relayed) |
+
+## Crafted and malformed packets
+
+The real clients only send correct packets. `probe` sends hand-made DHCPv6,
+DHCPv4 or RS messages from any node and shows the decoded replies; `fuzz` sends
+seeded random mutations of valid messages and then checks that every odhcpd is
+still running and still answers:
+
+```
+tests/lab <node> probe [--dev DEV] dhcp6|dhcp4|rs <step> [<step> ...]
+tests/lab <node> fuzz [--dev DEV] dhcp6|dhcp4|rs <count> [seed]
+```
+
+Packets are built byte by byte (so any option or length can be wrong) and sent
+as raw frames, so the probe doesn't disturb the node's real clients. Each probe
+is saved as `lab/run/<name>/<node>/probe-*.pcap`. Steps look like
+`sol:rc,na=1`, `req`, `ren`, `conf:na=1/2001:db8::1`, `inf`; flags include
+`opt=CODE:HEX` (a raw option), `rawopt=HEX`, `raw=HEX` (the whole message),
+`trid=HEX`, `nosid`, `duid=HEX`, `relay` (wrapped in a Relay-Forward) and
+`as=client` (the node's real client's identity: its MAC, DUID and IAID, and its
+current leases). The full syntax is at the top of `tests/netlab/probe.py`.
+Example: the Windows 10 Confirm from odhcpd issue #447 (one IA_NA per address,
+all with the same IAID), sent with lan-client's identity:
+
+```
+tests/lab lan-client probe dhcp6 "conf:as=client,na=client/<lease 1>,na=client/<lease 2>"
+```
 
 ## Known issues (in odhcpd, found with the lab)
 

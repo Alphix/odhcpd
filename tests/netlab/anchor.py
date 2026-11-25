@@ -28,7 +28,9 @@ def sh(*cmd):
 def holder(name):
     """Start a process in new network/mount/UTS namespaces with its own /run; return its pid."""
     # /proc/sys/kernel/hostname belongs to the real root, so set the hostname via the syscall
+    # sysfs shows the devices of the namespace that mounts it, so each node gets its own
     script = (f'mount -t tmpfs -o mode=0755 tmpfs /run && mkdir -p /run/ubus && '
+              f'mount -t sysfs sysfs /sys && '
               f'{sys.executable} -c "import socket; socket.sethostname(\'{name}\')" && '
               f'exec sleep infinity')
     p = subprocess.Popen(['unshare', '--net', '--mount', '--uts', '--propagation', 'private',

@@ -9,6 +9,7 @@ usage: tests/lab build [--clean] [--asan] [--ref NAME=REF ...] [--only NAME ...]
        tests/lab [--name NAME] <odhcpd node> ubus <args...> | reload | restart | config
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -63,6 +64,8 @@ node/network commands:
   router wan|wan6 renew | release | restart | log     the router's uplink clients
   isp prefix-change                                   delegate from the other PD pool
   <network> capture [tcpdump args...]                 tcpdump on the network's bridge
+  <node> probe [--dev DEV] dhcp6|dhcp4|rs <step>...   crafted exchanges (see netlab/probe.py)
+  <node> fuzz [--dev DEV] dhcp6|dhcp4|rs <count> [seed]   mutated messages, then a health check
   clients renew | release | restart [4|6]             all three client nodes
   servers log [-f]                                    isp, router and relay odhcpd logs
 """
@@ -114,6 +117,21 @@ def target_cmd(name, argv):
         os.execvpe('nsenter', lab.argv(target, ['tcpdump', '-Z', 'root', '-i', 'br', '-n', '-l']
                                        + (rest or ['-vv'])), paths_env)
 
+    if cmd in ('probe', 'fuzz'):
+        dev = None
+        if rest[:1] == ['--dev']:
+            dev, rest = rest[1], rest[2:]
+        if cmd == 'probe':
+            if len(rest) < 2 or rest[0] not in ('dhcp6', 'dhcp4', 'rs'):
+                sys.exit(USAGE_TARGET)
+            for res in lab.probe(target, rest[0], rest[1:], dev=dev):
+                print(json.dumps(res, indent=1))
+        else:
+            if len(rest) < 2:
+                sys.exit(USAGE_TARGET)
+            seed = int(rest[2]) if len(rest) > 2 else 1
+            print(json.dumps(lab.fuzz(target, rest[0], int(rest[1]), seed, dev=dev), indent=1))
+        return
     if kind == 'odhcpd' and cmd in ('ubus', 'reload', 'restart', 'config'):
         if cmd == 'ubus':
             lab.require()
