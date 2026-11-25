@@ -16,6 +16,9 @@ NODES = {
 
 NETWORKS = ['wan', 'guest', 'lan', 'sublan']
 
+# nodes that forward between their interfaces
+ROUTERS = ['router', 'relay']
+
 # the bridge in each network's namespace; its ports are named after the member nodes
 BRIDGE = 'br'
 

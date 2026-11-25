@@ -1,0 +1,6 @@
+{
+	"interfaces": {
+		"lan": { "device": "lan", "proto": "static", "ipaddr": [ "192.168.1.2/24" ] },
+		"sublan": { "device": "sublan", "proto": "static" }
+	}
+}

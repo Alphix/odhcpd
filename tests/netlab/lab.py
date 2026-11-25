@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from .paths import RUN, TESTS, PREFIX, env as prefix_env
+from .topology import ROUTERS
 from .topology import NODES, NETWORKS, BRIDGE
 
 
@@ -75,11 +76,20 @@ class Lab:
         for _ in range(300):
             self._load()
             if self.state and self.state.get('ready'):
-                return self
+                break
             if anchor.poll() is not None:
                 raise LabError(f'lab setup failed:\n{(self.dir / "anchor.log").read_text()}')
             time.sleep(0.05)
-        raise LabError('lab setup timed out, see ' + str(self.dir / 'anchor.log'))
+        else:
+            raise LabError('lab setup timed out, see ' + str(self.dir / 'anchor.log'))
+        try:
+            for node, spec in NODES.items():
+                if spec['kind'] == 'odhcpd':
+                    self.start_odhcpd_node(node)
+        except Exception:
+            self.down()
+            raise
+        return self
 
     def down(self):
         if not self.running():
@@ -97,6 +107,86 @@ class Lab:
                 time.sleep(0.05)
         (self.dir / 'state.json').unlink(missing_ok=True)
         self.state = None
+
+    # ---- odhcpd nodes ----------------------------------------------------------------------
+    def wait_for(self, pred, timeout=10, what='condition'):
+        end = time.time() + timeout
+        while time.time() < end:
+            if pred():
+                return
+            time.sleep(0.05)
+        raise LabError(f'timed out waiting for {what}')
+
+    def configure_odhcpd_node(self, node):
+        """Copy the node's configs (tests/configs/<node>) into its lab directory."""
+        d = self.dir / node
+        cfg = d / 'cfg'
+        cfg.mkdir(parents=True, exist_ok=True)
+        (d / 'hosts').mkdir(exist_ok=True)
+        (d / 'pio').mkdir(exist_ok=True)
+        src = TESTS / 'configs' / node
+        (cfg / 'dhcp').write_text((src / 'dhcp').read_text().replace('@DIR@', str(d)))
+        for f in ('network', 'system'):
+            (cfg / f).touch()
+        (d / 'netifd.json').write_text((src / 'netifd.json').read_text())
+
+    def start_odhcpd_node(self, node):
+        """ubusd, netifd-stub and odhcpd in a node, each waiting for the previous one."""
+        d = self.dir / node
+        self.configure_odhcpd_node(node)
+        if node in ROUTERS:
+            for key in ('net/ipv4/ip_forward', 'net/ipv6/conf/all/forwarding'):
+                self.run(node, ['sh', '-c', f'echo 1 > /proc/sys/{key}'])
+        self.spawn(node, ['ubusd'], 'ubusd')
+        self.wait_for(lambda: self._sock(node), what=f'{node} ubusd')
+        self.spawn(node, ['netifd-stub', '-c', str(d / 'netifd.json')], 'netifd')
+        self.run(node, ['ubus', '-t', '10', 'wait_for', 'network.interface'])
+        self.start_odhcpd(node)
+
+    def _sock(self, node):
+        return subprocess.run(self.argv(node, ['test', '-S', '/run/ubus/ubus.sock'])).returncode == 0
+
+    def start_odhcpd(self, node):
+        d = self.dir / node
+        self.spawn(node, ['odhcpd', '-c', str(d / 'cfg'), '-f', '-l', '7'], 'odhcpd')
+        self.run(node, ['ubus', '-t', '10', 'wait_for', 'dhcp'])
+
+    def daemon_pid(self, node, name):
+        try:
+            pid = int((self.dir / node / f'{name}.pid').read_text())
+        except (FileNotFoundError, ValueError):
+            return None
+        try:
+            os.kill(pid, 0)
+            return pid
+        except ProcessLookupError:
+            return None
+
+    def signal(self, node, name, sig):
+        pid = self.daemon_pid(node, name)
+        if not pid:
+            raise LabError(f'{node}: {name} is not running')
+        os.kill(pid, sig)
+
+    def stop_daemon(self, node, name, timeout=5):
+        pid = self.daemon_pid(node, name)
+        if not pid:
+            return
+        os.kill(pid, signal.SIGTERM)
+        try:
+            self.wait_for(lambda: self.daemon_pid(node, name) is None, timeout, f'{node} {name} to stop')
+        except LabError:
+            os.kill(pid, signal.SIGKILL)
+
+    def reload(self, node):
+        """odhcpd rereads its config (SIGHUP), as on OpenWrt's reload."""
+        self.require()
+        self.signal(node, 'odhcpd', signal.SIGHUP)
+
+    def restart(self, node):
+        self.require()
+        self.stop_daemon(node, 'odhcpd')
+        self.start_odhcpd(node)
 
     # ---- running things in nodes and networks -------------------------------------------------
     def pid(self, target):

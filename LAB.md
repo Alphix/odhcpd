@@ -6,7 +6,9 @@ namespace, so it needs no root privileges, no VMs and no OpenWrt image, and it
 builds everything it needs itself.
 
 *Status: under construction. Implemented so far: `tests/lab build`, the network
-(namespaces, bridges, links) and `up`/`down`/`status`/`shell`/`log`/`exec`.*
+(namespaces, bridges, links), the three odhcpd nodes (with ubusd and the netifd
+stand-in) and the commands below. Not yet: the DHCP clients (router uplink and
+the three client nodes).*
 
 ## Topology
 
@@ -44,8 +46,13 @@ be captured); the others are nodes, each in its own network namespace.
 * **guest-client**, **lan-client**, **sublan-client**: DHCPv4/DHCPv6 clients
   (`udhcpc` and `odhcp6c`).
 
-Each odhcpd node has its own ubusd and a minimal stand-in for netifd, which
-provides the interface information odhcpd normally gets from netifd.
+Each odhcpd node has its own ubusd and a minimal stand-in for netifd
+(`tests/netifd-stub/`), which provides the interface information odhcpd normally
+gets from netifd (`network.interface`, `dump` and update notifications), puts
+the interfaces' addresses on their devices and, like netifd's `ip6assign`,
+gives interfaces a /64 of the ULA prefix and of delegated prefixes. DHCP client
+scripts report their results to it with
+`ubus call network.interface update '{"interface": ..., ...}'`.
 
 ## Addressing
 
@@ -92,7 +99,16 @@ tests/lab <node> shell           # a shell in a node (root inside the lab, not o
 tests/lab <node> exec <cmd...>   # run one command in a node
 tests/lab <node> log [-f]        # the node's logs
 tests/lab down                   # stop the lab (its logs stay in lab/run/<name>/)
+
+tests/lab <odhcpd node> ubus <args...>   # e.g. ubus call dhcp ipv6leases
+tests/lab <odhcpd node> reload           # odhcpd rereads its config (SIGHUP)
+tests/lab <odhcpd node> restart          # restart odhcpd
+tests/lab <odhcpd node> config           # edit the node's odhcpd config, then reload
 ```
+
+The odhcpd nodes' configurations come from `tests/configs/<node>/` (`dhcp` is the
+UCI config, `netifd.json` the netifd stand-in's interfaces) and are copied into
+`lab/run/<name>/<node>/` when the lab starts; `config` edits that copy.
 
 Nodes: `isp`, `router`, `relay`, `guest-client`, `lan-client`, `sublan-client`.
 Networks (`shell`/`exec` run in the network's bridge namespace, e.g. for

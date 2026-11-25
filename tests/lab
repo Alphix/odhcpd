@@ -6,6 +6,7 @@ usage: tests/lab build [--clean] [--asan] [--ref NAME=REF ...] [--only NAME ...]
        tests/lab clean [--all]
        tests/lab [--name NAME] up | down | status
        tests/lab [--name NAME] <node|network> shell | log [-f] | exec <cmd...>
+       tests/lab [--name NAME] <odhcpd node> ubus <args...> | reload | restart | config
 """
 import argparse
 import os
@@ -58,7 +59,7 @@ def target_cmd(name, argv):
     """tests/lab [--name N] <node|network> <command> [args]"""
     targets = list(NODES) + NETWORKS
     p = argparse.ArgumentParser(prog=f'tests/lab {argv[0]}')
-    p.add_argument('command', choices=['shell', 'log', 'exec'])
+    p.add_argument('command', choices=['shell', 'log', 'exec', 'ubus', 'reload', 'restart', 'config'])
     p.add_argument('-f', '--follow', action='store_true', help='log: keep following')
     p.add_argument('args', nargs=argparse.REMAINDER)
     a = p.parse_args(argv[1:])
@@ -66,8 +67,26 @@ def target_cmd(name, argv):
     target = argv[0]
     if target not in targets:
         sys.exit(f'tests/lab: unknown node or network "{target}" ({", ".join(targets)})')
+    odhcpd_cmds = ('ubus', 'reload', 'restart', 'config')
+    if a.command in odhcpd_cmds and NODES.get(target, {}).get('kind') != 'odhcpd':
+        sys.exit(f'tests/lab: {a.command} only applies to odhcpd nodes '
+                 f'({", ".join(n for n, s in NODES.items() if s["kind"] == "odhcpd")})')
     if a.command == 'shell':
         lab.shell(target)
+    elif a.command == 'ubus':
+        lab.require()
+        os.execvpe('nsenter', lab.argv(target, ['ubus'] + a.args), __import__('netlab.paths').paths.env())
+    elif a.command == 'reload':
+        lab.reload(target)
+    elif a.command == 'restart':
+        lab.restart(target)
+    elif a.command == 'config':
+        lab.require()
+        cfg = lab.dir / target / 'cfg' / 'dhcp'
+        editor = os.environ.get('VISUAL') or os.environ.get('EDITOR') or 'vi'
+        if subprocess.run([editor, str(cfg)]).returncode == 0:
+            lab.reload(target)
+            print(f'{target}: odhcpd reloaded')
     elif a.command == 'exec':
         lab.require()
         os.execvpe('nsenter', lab.argv(target, a.args), __import__('netlab.paths').paths.env())

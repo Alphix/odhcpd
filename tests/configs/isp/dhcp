@@ -1,0 +1,17 @@
+# isp: the ISP's DHCPv4/DHCPv6 server on "wan"; delegates /56s from 2001:db8:100::/40
+config odhcpd 'odhcpd'
+	option maindhcp '1'
+	option leasefile '@DIR@/leases'
+	option hostsdir '@DIR@/hosts'
+	option loglevel '7'
+
+config dhcp 'wan'
+	option interface 'wan'
+	option dhcpv4 'server'
+	option dhcpv6 'server'
+	option ra 'server'
+	list ra_flags 'managed-config'
+	list ra_flags 'other-config'
+	option start '100'
+	option limit '100'
+	option leasetime '1h'

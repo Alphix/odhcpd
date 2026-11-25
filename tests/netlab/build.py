@@ -206,6 +206,7 @@ def build(refs=None, clean=False, sanitize=False, only=None):
 def built():
     """Is everything the lab runs there?"""
     need = [PREFIX / 'sbin' / 'odhcpd', PREFIX / 'sbin' / 'ubusd', PREFIX / 'bin' / 'ubus',
+            PREFIX / 'sbin' / 'netifd-stub',
             PREFIX / 'sbin' / 'odhcp6c', PREFIX / 'bin' / 'udhcpc']
     return all(p.exists() for p in need)
 

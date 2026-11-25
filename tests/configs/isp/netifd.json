@@ -1,0 +1,9 @@
+{
+	"interfaces": {
+		"wan": {
+			"device": "wan", "proto": "static",
+			"ipaddr": [ "192.0.2.1/24" ],
+			"ip6addr": [ "2001:db8:ff::1/64", "2001:db8:100::1/40" ]
+		}
+	}
+}

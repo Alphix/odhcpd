@@ -1,0 +1,17 @@
+{
+	"ula_prefix": "fd00:1::/48",
+	"interfaces": {
+		"wan": { "device": "wan", "proto": "dhcp" },
+		"wan6": { "device": "wan", "proto": "dhcpv6" },
+		"lan": {
+			"device": "lan", "proto": "static",
+			"ipaddr": [ "192.168.1.1/24" ],
+			"ip6assign": 64, "ip6hint": 1
+		},
+		"guest": {
+			"device": "guest", "proto": "static",
+			"ipaddr": [ "192.168.2.1/24" ],
+			"ip6assign": 64, "ip6hint": 2
+		}
+	}
+}
