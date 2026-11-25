@@ -5,10 +5,6 @@ A complete home network on your own machine, for testing odhcpd by hand and
 namespace, so it needs no root privileges, no VMs and no OpenWrt image, and it
 builds everything it needs itself.
 
-*Status: under construction. Implemented: the whole network with its odhcpd
-nodes and DHCP clients, crafted/malformed packets and the commands below. Not
-yet: the automated tests.*
-
 ## Topology
 
 ```mermaid
@@ -88,6 +84,22 @@ all with the same IAID), sent with lan-client's identity:
 ```
 tests/lab lan-client probe dhcp6 "conf:as=client,na=client/<lease 1>,na=client/<lease 2>"
 ```
+
+## Automated tests
+
+```
+python3 -m pytest -c tests/pytest.ini tests
+```
+
+builds what's missing, then runs the tests in `tests/test_*.py` (about three
+minutes). They use the same Python library as `tests/lab` (`tests/netlab/`),
+so whatever you do by hand can become a test: the `lab` fixture starts one lab
+per test module, `fresh_lab` one per test, each under a unique name (their
+files stay in `lab/run/pytest-*/`), and both wait until the network has
+settled. A test marked `@pytest.mark.requires('<commit subject>')` is skipped
+unless that odhcpd commit is in the checkout; behaviour odhcpd doesn't have yet
+is marked `xfail`. The CI runs the same build and tests (`.github/workflows/ci.yml`,
+job "Network lab tests").
 
 ## Known issues (in odhcpd, found with the lab)
 

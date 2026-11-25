@@ -351,6 +351,24 @@ class Lab:
         os.execvpe(argv[0], argv, e)
 
     # ---- observation --------------------------------------------------------------------------
+    def ubus(self, node, path, method, args=None):
+        """A ubus call in an odhcpd node, decoded."""
+        cmd = ['ubus', 'call', path, method] + ([json.dumps(args)] if args else [])
+        out = self.run(node, cmd)
+        return json.loads(out) if out.strip() else {}
+
+    def addresses(self, node, dev=None, family=6, scope='global'):
+        """A node's addresses on dev (default: its first interface) as 'addr/len' strings."""
+        dev = dev or self.default_dev(node)
+        out = self.run(node, ['ip', f'-{family}', '-o', 'addr', 'show', 'dev', dev, 'scope', scope])
+        return [line.split()[3] for line in out.splitlines() if line]
+
+    def leases(self, node, family=6):
+        """{interface: [lease dicts]} from odhcpd's ubus ipv4leases/ipv6leases."""
+        d = self.ubus(node, 'dhcp', f'ipv{family}leases').get('device', {})
+        return {k: v.get('leases', []) for k, v in d.items()}
+
+
     def logs(self, target):
         """The log files of a node, oldest first."""
         d = self.dir / target

@@ -39,6 +39,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 from scapy.all import (AsyncSniffer, Ether, IP, IPv6, UDP, Raw, ICMPv6ND_RS, sendp, wrpcap,
@@ -158,9 +159,13 @@ class Prober:
     def exchange(self, frame, match, timeout):
         if self.dry:
             return []
-        sn = AsyncSniffer(iface=self.dev, store=True, filter='udp or icmp6')
+        ready = threading.Event()
+        sn = AsyncSniffer(iface=self.dev, store=True, filter='udp or icmp6',
+                          started_callback=ready.set)
         sn.start()
-        time.sleep(0.1)
+        # send only once the sniffer's socket is open, else a fast reply is lost
+        if not ready.wait(5):
+            raise RuntimeError('sniffer did not start')
         sendp(frame, iface=self.dev)
         time.sleep(timeout)
         pkts = sn.stop() or []
