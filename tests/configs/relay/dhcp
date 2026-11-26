@@ -1,4 +1,4 @@
-# relay: relays DHCPv4, DHCPv6, RA and NDP from "lan" (the master) to "sublan"
+# relay: relays DHCPv4, DHCPv6, RA and NDP from "lan" (the master) to "slan"
 config odhcpd 'odhcpd'
 	option maindhcp '1'
 	option leasefile '@DIR@/leases'
@@ -13,8 +13,8 @@ config dhcp 'lan'
 	option ra 'relay'
 	option ndp 'relay'
 
-config dhcp 'sublan'
-	option interface 'sublan'
+config dhcp 'slan'
+	option interface 'slan'
 	option dhcpv4 'relay'
 	option dhcpv6 'relay'
 	option ra 'relay'

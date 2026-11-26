@@ -6,5 +6,5 @@ def test_router_restart_forgets_and_relearns_leases(fresh_lab):
     assert lab.leases('router')['lan']
     lab.restart('router')
     assert not lab.leases('router').get('lan')
-    lab.client_action('lan-client', 'renew', 'dhcp6')
+    lab.client_action('lan-copenwrt', 'renew', 'dhcp6')
     lab.wait_for(lambda: lab.leases('router').get('lan'), 20, 'the lease to come back')

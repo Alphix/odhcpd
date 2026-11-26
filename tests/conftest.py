@@ -49,7 +49,7 @@ def settled(lab):
     """Wait until the network is up and stable: the router has its /56, and both direct clients
     have an IPv4 address and exactly the DHCPv6 addresses the router has leased to them (with a
     /64 of the delegated prefix; odhcp6c starts over once that prefix appears in the RAs)."""
-    iface = {'guest-client': 'guest', 'lan-client': 'lan'}
+    iface = {'guest-copenwrt': 'guest', 'lan-copenwrt': 'lan'}
 
     def ready():
         dump = lab.ubus('router', 'network.interface', 'dump')['interface']

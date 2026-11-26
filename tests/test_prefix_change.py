@@ -11,7 +11,7 @@ def test_prefix_change_reaches_the_clients(fresh_lab):
     lab.wait_for(lambda: any(in_prefix(a, new40) for a in lab.addresses('router', 'lan')), 20,
                  'the router\'s lan to get a /64 of the new prefix')
     assert not any(in_prefix(a, old40) for a in lab.addresses('router', 'lan'))
-    lab.client_action('lan-client', 'renew', 'dhcp6')
+    lab.client_action('lan-copenwrt', 'renew', 'dhcp6')
     lab.wait_for(lambda: any(a.endswith('/128') and in_prefix(a, new40)
-                             for a in lab.addresses('lan-client')), 20,
-                 'lan-client to get a lease from the new prefix')
+                             for a in lab.addresses('lan-copenwrt')), 20,
+                 'lan-copenwrt to get a lease from the new prefix')

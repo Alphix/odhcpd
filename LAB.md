@@ -15,17 +15,17 @@ flowchart TB
     guest(("guest"))
     lan(("lan"))
     relay["relay<br/>odhcpd: relay mode"]
-    sublan(("sublan"))
-    gc["guest-client<br/>udhcpc + odhcp6c"]
-    lc["lan-client<br/>udhcpc + odhcp6c"]
-    sc["sublan-client<br/>udhcpc + odhcp6c"]
+    slan(("slan"))
+    gc["guest-copenwrt<br/>udhcpc + odhcp6c"]
+    lc["lan-copenwrt<br/>udhcpc + odhcp6c"]
+    sc["slan-copenwrt<br/>udhcpc + odhcp6c"]
 
     isp --- wan --- router
     router --- guest --- gc
     router --- lan
     lan --- lc
     lan --- relay
-    relay --- sublan --- sc
+    relay --- slan --- sc
 ```
 
 Round nodes are networks (a Linux bridge each, which is also where packets can
@@ -37,8 +37,8 @@ be captured); the others are nodes, each in its own network namespace.
   (OpenWrt's DHCP clients: busybox `udhcpc` and `odhcp6c`) and the `lan` and
   `guest` networks, each getting a /64 from the delegated /56.
 * **relay**: a second odhcpd relaying DHCPv4, DHCPv6, RA and NDP from `lan` to
-  `sublan` (transparently: `sublan` shares `lan`'s subnets).
-* **guest-client**, **lan-client**, **sublan-client**: DHCPv4/DHCPv6 clients
+  `slan` (transparently: `slan` shares `lan`'s subnets).
+* **guest-copenwrt**, **lan-copenwrt**, **slan-copenwrt**: DHCPv4/DHCPv6 clients
   (`udhcpc` and `odhcp6c`).
 
 Each odhcpd node has its own ubusd and a minimal stand-in for netifd
@@ -56,7 +56,7 @@ scripts report their results to it with
 | wan | 192.0.2.0/24 | 2001:db8:ff::/64; isp delegates /56s from 2001:db8:100::/40 |
 | lan | 192.168.1.0/24 | a /64 of the delegated /56, a /64 of fd00:1::/48 |
 | guest | 192.168.2.0/24 | a /64 of the delegated /56, a /64 of fd00:1::/48 |
-| sublan | (lan's subnet, relayed) | (lan's /64s, relayed) |
+| slan | (lan's subnet, relayed) | (lan's /64s, relayed) |
 
 ## Crafted and malformed packets
 
@@ -79,10 +79,10 @@ is saved as `lab/run/<name>/<node>/probe-*.pcap`. Steps look like
 `as=client` (the node's real client's identity: its MAC, DUID and IAID, and its
 current leases). The full syntax is at the top of `tests/netlab/probe.py`.
 Example: the Windows 10 Confirm from odhcpd issue #447 (one IA_NA per address,
-all with the same IAID), sent with lan-client's identity:
+all with the same IAID), sent with lan-copenwrt's identity:
 
 ```
-tests/lab lan-client probe dhcp6 "conf:as=client,na=client/<lease 1>,na=client/<lease 2>"
+tests/lab lan-copenwrt probe dhcp6 "conf:as=client,na=client/<lease 1>,na=client/<lease 2>"
 ```
 
 ## Automated tests
@@ -105,9 +105,9 @@ job "Network lab tests").
 
 * The relay node is meant to relay DHCPv4 (`option dhcpv4 'relay'`), which
   odhcpd doesn't support yet. Instead it runs a DHCPv4 server on `lan` (pool
-  from its own address), competing with the router; `sublan-client` gets no
+  from its own address), competing with the router; `slan-copenwrt` gets no
   IPv4 address.
-* DHCPv6 through the relay doesn't reach `sublan-client` yet (it gets SLAAC
+* DHCPv6 through the relay doesn't reach `slan-copenwrt` yet (it gets SLAAC
   addresses through the relayed RAs, but no DHCPv6 lease). The relay also
   treats other clients' messages it sees on `lan` as relay replies.
 * isp delegates from an address on its `wan` interface (`2001:db8:100::1/40`),
@@ -176,9 +176,9 @@ The odhcpd nodes' configurations come from `tests/configs/<node>/` (`dhcp` is th
 UCI config, `netifd.json` the netifd stand-in's interfaces) and are copied into
 `lab/run/<name>/<node>/` when the lab starts; `config` edits that copy.
 
-Nodes: `isp`, `router`, `relay`, `guest-client`, `lan-client`, `sublan-client`.
+Nodes: `isp`, `router`, `relay`, `guest-copenwrt`, `lan-copenwrt`, `slan-copenwrt`.
 Networks (`shell`/`exec` run in the network's bridge namespace, e.g. for
-captures): `wan`, `guest`, `lan`, `sublan`. `--name NAME` (before the other
+captures): `wan`, `guest`, `lan`, `slan`. `--name NAME` (before the other
 arguments) runs a separate lab; several labs can run at the same time.
 
 How it works: `up` starts an anchor process in a new user namespace (you are
