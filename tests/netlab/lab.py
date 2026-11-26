@@ -1,7 +1,8 @@
 """A running (or startable) lab, addressed by name; used by tests/lab and the tests.
 
-A lab's files live in RUN/<name>/: state.json (pids and namespaces, written by the anchor),
-anchor.log, and one directory per node for its configs, logs and pids.
+A lab's files live in RUN/<name>/: config.json (its nodes and client stacks), state.json (pids
+and namespaces, written by the anchor), anchor.log, and one directory per node for its configs,
+logs and pids.
 """
 import json
 import os
@@ -11,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+from . import stacks
 from .paths import RUN, TESTS, PREFIX, env as prefix_env
 from .topology import ROUTERS, UPSTREAM
 from .topology import NODES, NETWORKS, BRIDGE
@@ -25,7 +27,25 @@ class Lab:
         self.name = name
         self.dir = RUN / name
         self.state = None
+        self.config = None
         self._load()
+
+    @property
+    def nodes(self):
+        """The lab's nodes (without the client nodes of stacks that aren't used)."""
+        if self.config:
+            return self.config['nodes']
+        return list(NODES)
+
+    def stack(self, node):
+        return NODES[node].get('stack')
+
+    def check_node(self, node):
+        """Raise if a known node isn't part of this lab (its client stack isn't used)."""
+        if node in NODES and node not in self.nodes:
+            st = self.stack(node)
+            why = (self.config or {}).get('skipped', {}).get(st, 'not used')
+            raise LabError(f'{node} is not in this lab: client stack "{st}" {why}')
 
     # ---- state ------------------------------------------------------------------------------
     def _load(self):
@@ -33,6 +53,10 @@ class Lab:
             self.state = json.loads((self.dir / 'state.json').read_text())
         except FileNotFoundError:
             self.state = None
+        try:
+            self.config = json.loads((self.dir / 'config.json').read_text())
+        except FileNotFoundError:
+            self.config = None
 
     def running(self):
         """Is the lab's anchor still alive (and still the same process)?"""
@@ -48,24 +72,34 @@ class Lab:
             raise LabError(f'lab "{self.name}" is not running (tests/lab up)')
 
     def processes(self):
-        """Pids of all processes in the lab's user namespace."""
+        """Pids of all processes in the lab's user namespace and the nodes' own ones."""
+        userns = {self.state['userns']} | set(self.state.get('node_userns', {}).values())
         pids = []
         for p in os.listdir('/proc'):
             if p.isdigit():
                 try:
-                    if os.readlink(f'/proc/{p}/ns/user') == self.state['userns']:
+                    if os.readlink(f'/proc/{p}/ns/user') in userns:
                         pids.append(int(p))
                 except (FileNotFoundError, PermissionError, ProcessLookupError):
                     pass
         return pids
 
     # ---- lifecycle --------------------------------------------------------------------------
-    def up(self):
+    def up(self, without=None, require=None):
+        """Start the lab. Client stacks are used when available (stacks.detect(); without and
+        require are lists of optional stacks, default from ODHCPD_LAB_WITHOUT/_REQUIRE)."""
         if self.running():
             raise LabError(f'lab "{self.name}" is already running')
+        try:
+            active, skipped = stacks.detect(without, require)
+        except stacks.StackError as e:
+            raise LabError(str(e))
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / 'state.json').unlink(missing_ok=True)
-        for node in NODES:
+        nodes = [n for n in NODES if NODES[n].get('stack', 'openwrt') in active]
+        self.config = {'nodes': nodes, 'stacks': active, 'skipped': skipped}
+        (self.dir / 'config.json').write_text(json.dumps(self.config, indent=1))
+        for node in nodes:
             (self.dir / node).mkdir(exist_ok=True)
         log = open(self.dir / 'anchor.log', 'w')
         anchor = subprocess.Popen(
@@ -83,12 +117,12 @@ class Lab:
         else:
             raise LabError('lab setup timed out, see ' + str(self.dir / 'anchor.log'))
         try:
-            for node, spec in NODES.items():
-                if spec['kind'] == 'odhcpd':
+            for node in nodes:
+                if NODES[node]['kind'] == 'odhcpd':
                     self.start_odhcpd_node(node)
             self.start_uplink()
-            for node, spec in NODES.items():
-                if spec['kind'] == 'client':
+            for node in nodes:
+                if NODES[node]['kind'] == 'client':
                     self.start_client_node(node)
         except Exception:
             self.down()
@@ -187,28 +221,92 @@ class Lab:
         self.start_odhcp6c('router', 'wan', 'wan6', iface='wan6', pd_len=56)
 
     def start_client_node(self, node):
-        """udhcpc (dhcp4) and odhcp6c (dhcp6) on the node's eth0; like netifd, the kernel's own
-        SLAAC is off, odhcp6c handles RAs."""
+        stack = self.stack(node)
+        if stack == 'systemd':
+            return self.start_networkd(node)
+        if stack == 'nm':
+            return self.start_nm(node)
+        # udhcpc (dhcp4) and odhcp6c (dhcp6) on eth0; like netifd, the kernel's own SLAAC is off,
+        # odhcp6c handles RAs
         self.run(node, ['sh', '-c', 'echo 0 > /proc/sys/net/ipv6/conf/eth0/accept_ra'])
         self.start_udhcpc(node, 'eth0', 'dhcp4')
         self.start_odhcp6c(node, 'eth0', 'dhcp6')
 
+    def _stack_node(self, node):
+        """Prepare a systemd/nm node: its files in <node>/<stack>/ and bind mounts."""
+        stack = self.stack(node)
+        bins, reason = stacks.binaries(stack)
+        if not bins:
+            raise LabError(f'{node}: {reason}')
+        d = self.dir / node / stack
+        for src, dst in stacks.prepare(stack, bins, d, node):
+            self.run(node, ['mount', '--bind', str(src), dst])
+        return bins, d
+
+    def start_networkd(self, node):
+        """systemd-networkd with the node's .network in /run/systemd/network."""
+        bins, d = self._stack_node(node)
+        self.start_dbus(node, bins, d)
+        self.run(node, ['mkdir', '-p', '/run/systemd/network', '/run/systemd/netif'])
+        self.run(node, ['cp', str(d / '10-lab.network'), '/run/systemd/network/'])
+        self.spawn(node, [bins['networkd']], 'networkd', env={'SYSTEMD_LOG_LEVEL': 'debug'})
+
+    def start_nm(self, node):
+        """NetworkManager, which activates the node's eth0 profile itself."""
+        bins, d = self._stack_node(node)
+        self.start_dbus(node, bins, d)
+        self.spawn(node, stacks.nm_command(bins, d), 'nm')
+
+    def start_dbus(self, node, bins, d):
+        """The node's private system bus (for networkctl/nmcli)."""
+        self.run(node, ['mkdir', '-p', '/run/dbus'])
+        self.spawn(node, [bins['dbus-daemon'], f'--config-file={d / "dbus.conf"}', '--nofork',
+                          '--nopidfile'], 'dbus')
+        self.wait_for(lambda: self._exists(node, '/run/dbus/system_bus_socket'),
+                      what=f'{node} dbus-daemon')
+
+    def _exists(self, node, path):
+        return subprocess.run(self.argv(node, ['test', '-e', path])).returncode == 0
+
     def dhcp_clients(self, node):
-        """Names of a node's DHCP client daemons (wan/wan6 on the router, dhcp4/dhcp6 on clients)."""
+        """Names of a node's DHCP client daemons (wan/wan6 on the router, dhcp4/dhcp6 on OpenWrt
+        clients, networkd or nm on the other client nodes)."""
         if node == 'router':
             return ['wan', 'wan6']
         if NODES[node]['kind'] == 'client':
-            return ['dhcp4', 'dhcp6']
+            return {'systemd': ['networkd'], 'nm': ['nm']}.get(self.stack(node), ['dhcp4', 'dhcp6'])
         return []
 
+    def stack_action(self, node, action):
+        """renew/release on a systemd or nm node with the stack's own tools; neither has a
+        DHCPv6 renew, so renew reapplies the configuration (networkctl reconfigure, nmcli
+        connection up), release takes eth0 down (both send releases then)."""
+        stack = self.stack(node)
+        bins, reason = stacks.binaries(stack)
+        if stack == 'systemd':
+            ctl = bins['networkctl']
+            # networkctl renew only renews DHCPv4; reconfigure restarts DHCPv4 and DHCPv6
+            cmds = {'renew': [[ctl, 'up', 'eth0'], [ctl, 'reconfigure', 'eth0']],
+                    'release': [[ctl, 'down', 'eth0']]}
+        else:
+            cli = bins['nmcli']
+            cmds = {'renew': [[cli, 'connection', 'up', 'eth0']],
+                    'release': [[cli, 'device', 'disconnect', 'eth0']]}
+        for cmd in cmds[action]:
+            self.run(node, cmd)
+
     def client_action(self, node, action, which=None):
-        """renew (SIGUSR1), release (SIGUSR2) or restart a node's DHCP clients (all, or one)."""
+        """renew (SIGUSR1), release (SIGUSR2) or restart a node's DHCP clients (all, or one);
+        on systemd/nm nodes with networkctl/nmcli, for both protocols at once."""
         self.require()
+        self.check_node(node)
         names = self.dhcp_clients(node)
         if which:
             if which not in names:
                 raise LabError(f'{node} has no client "{which}" ({", ".join(names) or "none"})')
             names = [which]
+        if self.stack(node) in stacks.OPTIONAL and action in ('renew', 'release'):
+            return self.stack_action(node, action)
         for name in names:
             if action == 'renew':
                 self.signal(node, name, signal.SIGUSR1)
@@ -306,6 +404,7 @@ class Lab:
     # ---- running things in nodes and networks -------------------------------------------------
     def pid(self, target):
         self.require()
+        self.check_node(target)
         if target in self.state['nodes']:
             return self.state['nodes'][target]
         if target in self.state['networks']:
@@ -313,7 +412,10 @@ class Lab:
         raise LabError(f'unknown node or network "{target}"')
 
     def argv(self, target, cmd):
-        """argv running cmd in a node's (or network's) namespaces, as root of the lab."""
+        """argv running cmd in a node's (or network's) namespaces, as root of the lab (in a
+        systemd node as the systemd-network user, with all capabilities)."""
+        if NODES.get(target, {}).get('stack') == 'systemd':
+            return [sys.executable, str(TESTS / 'netlab' / 'enter.py'), str(self.pid(target))] + list(cmd)
         return ['nsenter', '--preserve-credentials', '-t', str(self.pid(target)),
                 '-U', '-n', '-m', '-u', '--'] + list(cmd)
 
@@ -378,8 +480,14 @@ class Lab:
         """Human-readable overview of nodes and networks."""
         self.require()
         out = [f'lab "{self.name}" ({self.dir})']
-        for node, spec in NODES.items():
-            out.append(f'{node} ({spec["kind"]}):')
+        cfg = self.config or {}
+        out.append('client stacks: ' + ', '.join(f'{s} ({v})' for s, v in cfg.get('stacks', {}).items()))
+        for s, why in cfg.get('skipped', {}).items():
+            out.append(f'  not used: {s}: {why}')
+        for node in self.nodes:
+            spec = NODES[node]
+            kind = spec['kind'] + (f', {spec["stack"]}' if 'stack' in spec else '')
+            out.append(f'{node} ({kind}):')
             for line in self.run(node, ['ip', '-br', 'addr']).splitlines():
                 if not line.startswith('lo '):
                     out.append('    ' + ' '.join(line.split()))

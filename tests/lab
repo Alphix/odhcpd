@@ -4,7 +4,7 @@
 usage: tests/lab build [--clean] [--asan] [--ref NAME=REF ...] [--only NAME ...]
        tests/lab check
        tests/lab clean [--all]
-       tests/lab [--name NAME] up | down | status
+       tests/lab [--name NAME] up [--without STACK] [--require STACK] | down | status
        tests/lab [--name NAME] <node|network> shell | log [-f] | exec <cmd...>
        tests/lab [--name NAME] <odhcpd node> ubus <args...> | reload | restart | config
 """
@@ -44,7 +44,7 @@ def cmd_clean(args):
 def cmd_up(args):
     if not labbuild.built():
         labbuild.build()
-    lab = Lab(args.name).up()
+    lab = Lab(args.name).up(without=args.without, require=args.require)
     print(lab.status())
 
 
@@ -60,15 +60,20 @@ USAGE_TARGET = """\
 node/network commands:
   <node> shell | exec <cmd...> | log [-f]            any node (shell/exec also for networks)
   <odhcpd node> ubus <args...> | reload | restart | config
-  <client node> renew | release | restart [4|6]       udhcpc (4) and/or odhcp6c (6)
+  <client node> renew | release | restart [4|6]       udhcpc (4) and/or odhcp6c (6); on the
+                                                      systemd/nm nodes networkd/NetworkManager
   router wan|wan6 renew | release | restart | log     the router's uplink clients
   isp prefix-change                                   delegate from the other PD pool
   <network> capture [tcpdump args...]                 tcpdump on the network's bridge
   <node> probe [--dev DEV] dhcp6|dhcp4|rs <step>...   crafted exchanges (see netlab/probe.py)
   <node> fuzz [--dev DEV] dhcp6|dhcp4|rs <count> [seed]   mutated messages, then a health check
-  clients renew | release | restart [4|6]             all three client nodes
+  clients renew | release | restart [4|6]             all client nodes (4|6: the OpenWrt ones)
   servers log [-f]                                    isp, router and relay odhcpd logs
 """
+
+
+def execin(argv, env):
+    os.execvpe(argv[0], argv, env)
 
 
 def follow_or_print(logs, follow, tag=False):
@@ -92,8 +97,8 @@ def target_cmd(name, argv):
 
     if target == 'clients':
         which = {'4': 'dhcp4', '6': 'dhcp6'}.get(rest[0]) if rest else None
-        for node, spec in NODES.items():
-            if spec['kind'] == 'client':
+        for node in lab.nodes:
+            if NODES[node]['kind'] == 'client' and (not which or lab.stack(node) == 'openwrt'):
                 lab.client_action(node, cmd, which)
         return
     if target == 'servers':
@@ -102,11 +107,12 @@ def target_cmd(name, argv):
         logs = [lab.dir / n / 'odhcpd.log' for n, s in NODES.items() if s['kind'] == 'odhcpd']
         return follow_or_print([l for l in logs if l.exists()], '-f' in rest, tag=True)
 
+    lab.check_node(target)
     if cmd == 'shell':
         return lab.shell(target)
     if cmd == 'exec':
         lab.require()
-        os.execvpe('nsenter', lab.argv(target, rest), paths_env)
+        execin(lab.argv(target, rest), paths_env)
     if cmd == 'log':
         return follow_or_print(lab.logs(target), '-f' in rest)
     if target in NETWORKS:
@@ -114,8 +120,8 @@ def target_cmd(name, argv):
             sys.exit(USAGE_TARGET)
         lab.require()
         # tcpdump would switch to its own user, which doesn't exist in the lab
-        os.execvpe('nsenter', lab.argv(target, ['tcpdump', '-Z', 'root', '-i', 'br', '-n', '-l']
-                                       + (rest or ['-vv'])), paths_env)
+        execin(lab.argv(target, ['tcpdump', '-Z', 'root', '-i', 'br', '-n', '-l']
+                        + (rest or ['-vv'])), paths_env)
 
     if cmd in ('probe', 'fuzz'):
         dev = None
@@ -135,7 +141,7 @@ def target_cmd(name, argv):
     if kind == 'odhcpd' and cmd in ('ubus', 'reload', 'restart', 'config'):
         if cmd == 'ubus':
             lab.require()
-            os.execvpe('nsenter', lab.argv(target, ['ubus'] + rest), paths_env)
+            execin(lab.argv(target, ['ubus'] + rest), paths_env)
         if cmd == 'reload':
             return lab.reload(target)
         if cmd == 'restart':
@@ -178,6 +184,10 @@ def main():
     sub = p.add_subparsers(dest='cmd', required=True)
 
     u = sub.add_parser('up', help='start the lab (builds first if needed)')
+    u.add_argument('--without', action='append', metavar='STACK',
+                   help='don\'t use this optional client stack (systemd, nm)')
+    u.add_argument('--require', action='append', metavar='STACK',
+                   help='fail if this optional client stack can\'t be used')
     u.set_defaults(func=cmd_up)
     d = sub.add_parser('down', help='stop the lab (keeps its logs)')
     d.set_defaults(func=cmd_down)

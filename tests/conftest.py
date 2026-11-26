@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from netlab import build
+from netlab import build, stacks
 from netlab.lab import Lab
 from netlab.paths import REPO
 
@@ -35,6 +35,16 @@ def pytest_collection_modifyitems(config, items):
             have = subjects() if have is None else have
             if mark.args[0] not in have:
                 item.add_marker(pytest.mark.skip(reason=f'needs odhcpd commit "{mark.args[0]}"'))
+
+
+def pytest_report_header(config):
+    try:
+        active, skipped = stacks.detect()
+    except stacks.StackError as e:
+        return [f'client stacks: {e}']
+    lines = ['client stacks: ' + ', '.join(f'{s} ({v})' for s, v in active.items())]
+    lines += [f'  not used: {s}: {why}' for s, why in skipped.items()]
+    return lines
 
 
 @pytest.fixture(scope='session', autouse=True)

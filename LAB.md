@@ -9,27 +9,46 @@ builds everything it needs itself.
 
 ```mermaid
 flowchart TB
-    isp["isp<br/>odhcpd: DHCPv4, DHCPv6 + PD /56"]
+    isp{{"isp<br/>odhcpd: DHCPv4, DHCPv6 + PD /56"}}
     wan(("wan"))
-    router["router<br/>odhcpd: home router<br/>udhcpc + odhcp6c on wan/wan6"]
+    router{{"router<br/>odhcpd: home router<br/>udhcpc + odhcp6c on wan/wan6"}}
     guest(("guest"))
     lan(("lan"))
-    relay["relay<br/>odhcpd: relay mode"]
+    relay{{"relay<br/>odhcpd: relay mode"}}
     slan(("slan"))
-    gc["guest-copenwrt<br/>udhcpc + odhcp6c"]
-    lc["lan-copenwrt<br/>udhcpc + odhcp6c"]
-    sc["slan-copenwrt<br/>udhcpc + odhcp6c"]
+    go("guest-copenwrt<br/>udhcpc + odhcp6c")
+    gs("guest-csystemd<br/>systemd-networkd")
+    gn("guest-cnm<br/>NetworkManager")
+    lo("lan-copenwrt<br/>udhcpc + odhcp6c")
+    ls("lan-csystemd<br/>systemd-networkd")
+    ln("lan-cnm<br/>NetworkManager")
+    so("slan-copenwrt<br/>udhcpc + odhcp6c")
+    ss("slan-csystemd<br/>systemd-networkd")
+    sn("slan-cnm<br/>NetworkManager")
+
+    classDef odhcpd fill:#f6c177,stroke:#b4770e,color:#000
+    classDef network fill:#a6d8a8,stroke:#3f8f47,color:#000
+    classDef client fill:#a9c8f0,stroke:#3d6fb4,color:#000
+    classDef optional fill:#dbe7f8,stroke:#3d6fb4,color:#000,stroke-width:2px,stroke-dasharray: 6 4
+    class isp,router,relay odhcpd
+    class wan,guest,lan,slan network
+    class go,lo,so client
+    class gs,gn,ls,ln,ss,sn optional
 
     isp --- wan --- router
-    router --- guest --- gc
+    router --- guest
+    guest --- go & gs & gn
     router --- lan
-    lan --- lc
     lan --- relay
-    relay --- slan --- sc
+    lan --- lo & ls & ln
+    relay --- slan
+    slan --- so & ss & sn
 ```
 
-Round nodes are networks (a Linux bridge each, which is also where packets can
-be captured); the others are nodes, each in its own network namespace.
+Hexagons are the odhcpd nodes and rounded boxes the client nodes, each in its
+own network namespace; dashed client nodes are only there when their client
+stack is installed (see "Client stacks"). Circles are networks (a Linux bridge
+each, which is also where packets can be captured).
 
 * **isp**: odhcpd as the ISP's DHCPv4 and DHCPv6 server, delegating a /56 to
   the router.
@@ -38,8 +57,10 @@ be captured); the others are nodes, each in its own network namespace.
   `guest` networks, each getting a /64 from the delegated /56.
 * **relay**: a second odhcpd relaying DHCPv4, DHCPv6, RA and NDP from `lan` to
   `slan` (transparently: `slan` shares `lan`'s subnets).
-* **guest-copenwrt**, **lan-copenwrt**, **slan-copenwrt**: DHCPv4/DHCPv6 clients
-  (`udhcpc` and `odhcp6c`).
+* **`<network>-c<stack>`**: the client nodes, one per network and client stack
+  (see "Client stacks"): `guest-copenwrt`, `lan-copenwrt` and `slan-copenwrt`
+  always, `-csystemd` and `-cnm` when systemd-networkd and NetworkManager are
+  installed.
 
 Each odhcpd node has its own ubusd and a minimal stand-in for netifd
 (`tests/netifd-stub/`), which provides the interface information odhcpd normally
@@ -48,6 +69,41 @@ the interfaces' addresses on their devices and, like netifd's `ip6assign`,
 gives interfaces a /64 of the ULA prefix and of delegated prefixes. DHCP client
 scripts report their results to it with
 `ubus call network.interface update '{"interface": ..., ...}'`.
+
+## Client stacks
+
+Each network has a client node per client stack:
+
+| Stack | Nodes | DHCP clients |
+| :---- | :---- | :----------- |
+| `openwrt` | `*-copenwrt` | busybox `udhcpc` and `odhcp6c`, as OpenWrt's netifd runs them (built by the lab) |
+| `systemd` | `*-csystemd` | `systemd-networkd` from your machine |
+| `nm` | `*-cnm` | NetworkManager from your machine (its internal DHCP clients) |
+
+`systemd` and `nm` are optional: they are used when they are installed and
+start in a namespace (checked with a short trial start when the lab comes up,
+cached in `lab/stacks.json` until the binaries change); otherwise their nodes
+are left out and their tests skipped, and `tests/lab status` (and the test
+output) says why. `tests/lab up --without STACK` leaves a stack out,
+`--require STACK` fails instead of leaving it out (for the tests:
+`ODHCPD_LAB_WITHOUT` and `ODHCPD_LAB_REQUIRE`, comma-separated). Other
+binaries, e.g. self-built ones, can be used with `ODHCPD_LAB_NETWORKD`,
+`ODHCPD_LAB_NETWORKCTL`, `ODHCPD_LAB_NETWORKMANAGER` and `ODHCPD_LAB_NMCLI`.
+
+These nodes run their stack's daemon with a private D-Bus system bus (for
+`networkctl` and `nmcli`), a read-only `/sys` (there is no udev in the lab) and
+their own configuration in `lab/run/<name>/<node>/<stack>/` (also bind-mounted
+over the host's `/etc/systemd/network`, `/var/lib/NetworkManager` and
+`/etc/machine-id` inside the node, so the host's own configuration doesn't
+apply). Each has a fixed identity: a machine-id and a DUID-UUID derived from the
+node name, IAID 1 (DHCPv4 uses the RFC 4361 client identifier with the same
+DUID and IAID) and the node name as hostname. The `openwrt` nodes have fixed
+MAC addresses, so their DUID-LLs are fixed too.
+
+networkd only drops its privileges when started as root, and NetworkManager
+insists on root, so each of these nodes also has its own user namespace,
+nested in the lab's: in `*-csystemd` you are the `systemd-network` user (with
+all capabilities in the node), in `*-cnm` root.
 
 ## Addressing
 
@@ -91,7 +147,7 @@ tests/lab lan-copenwrt probe dhcp6 "conf:as=client,na=client/<lease 1>,na=client
 python3 -m pytest -c tests/pytest.ini tests
 ```
 
-builds what's missing, then runs the tests in `tests/test_*.py` (about three
+builds what's missing, then runs the tests in `tests/test_*.py` (about four
 minutes). They use the same Python library as `tests/lab` (`tests/netlab/`),
 so whatever you do by hand can become a test: the `lab` fixture starts one lab
 per test module, `fresh_lab` one per test, each under a unique name (their
@@ -118,7 +174,8 @@ job "Network lab tests").
 From your distribution: a C compiler, `cmake`, `make`, `git`, `pkg-config`,
 Python 3 with `scapy` (and `pytest` for the tests), `iproute2`, `util-linux`
 (`unshare`, `nsenter`) and kernel support for bridges and veth devices.
-`tcpdump` is optional (packet captures). Unprivileged user namespaces must be
+`tcpdump` is optional (packet captures), as are systemd-networkd and
+NetworkManager (with `dbus-daemon`; see "Client stacks"). Unprivileged user namespaces must be
 allowed (the default on most distributions; on Ubuntu 24.04 and later:
 `sysctl kernel.apparmor_restrict_unprivileged_userns=0`).
 
@@ -144,6 +201,7 @@ libnl-tiny, libubox, ubus, uci (as in odhcpd's CI), odhcp6c, busybox with only
 
 ```
 tests/lab up                     # build if needed, start the lab, show its status
+                                 # (--without/--require STACK: see "Client stacks")
 tests/lab status                 # nodes with their addresses, networks with their members
 tests/lab <node> shell           # a shell in a node (root inside the lab, not on your machine)
 tests/lab <node> exec <cmd...>   # run one command in a node
@@ -157,16 +215,23 @@ tests/lab <odhcpd node> config           # edit the node's odhcpd config, then r
 ```
 
 ```
-tests/lab <client node> renew | release | restart [4|6]    udhcpc (4) and/or odhcp6c (6)
+tests/lab <client node> renew | release | restart [4|6]    udhcpc (4) and/or odhcp6c (6),
+                                                           or networkd/NetworkManager
 tests/lab router wan|wan6 renew | release | restart | log  the router's uplink clients
 tests/lab isp prefix-change                                isp delegates from its other pool
 tests/lab <network> capture [tcpdump args...]              tcpdump on the network's bridge
-tests/lab clients renew | release | restart [4|6]          all three client nodes
+tests/lab clients renew | release | restart [4|6]          all client nodes (with 4|6: the
+                                                           openwrt ones)
 tests/lab servers log [-f]                                 the three odhcpd logs
 ```
 
 `renew` and `release` send SIGUSR1/SIGUSR2 to the clients (both udhcpc and
-odhcp6c renew/release on those). The clients run as on OpenWrt: the router's
+odhcp6c renew/release on those). On the `systemd` and `nm` nodes, which have no
+DHCPv6 renew command, `renew` reapplies the configuration (`networkctl
+reconfigure`, `nmcli connection up`) and `release` takes `eth0` down (both send
+releases); `restart` restarts networkd or NetworkManager. Their logs are
+`networkd.log` and `nm.log`, plus `dbus.log`. The OpenWrt clients run as on
+OpenWrt: the router's
 `wan`/`wan6` report to its netifd stand-in, the client nodes' script
 (`tests/scripts/dhcp-client-script`) applies addresses and routes itself; the
 kernel's own SLAAC is off, odhcp6c handles RAs. Their logs are `wan.log`,
@@ -176,7 +241,8 @@ The odhcpd nodes' configurations come from `tests/configs/<node>/` (`dhcp` is th
 UCI config, `netifd.json` the netifd stand-in's interfaces) and are copied into
 `lab/run/<name>/<node>/` when the lab starts; `config` edits that copy.
 
-Nodes: `isp`, `router`, `relay`, `guest-copenwrt`, `lan-copenwrt`, `slan-copenwrt`.
+Nodes: `isp`, `router`, `relay` and the client nodes `guest-c<stack>`,
+`lan-c<stack>`, `slan-c<stack>` (`openwrt`, and `systemd` and `nm` if used).
 Networks (`shell`/`exec` run in the network's bridge namespace, e.g. for
 captures): `wan`, `guest`, `lan`, `slan`. `--name NAME` (before the other
 arguments) runs a separate lab; several labs can run at the same time.

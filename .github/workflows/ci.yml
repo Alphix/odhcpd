@@ -163,6 +163,13 @@ jobs:
           sudo apt update
           sudo apt install cmake pkg-config python3-scapy python3-pytest tcpdump
 
+      # the lab's nm client nodes; masked first so it doesn't manage the runner's network
+      - name: Install NetworkManager
+        run: |
+          sudo systemctl mask NetworkManager.service NetworkManager-wait-online.service \
+            NetworkManager-dispatcher.service
+          sudo apt install network-manager
+
       - name: Allow unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
@@ -170,6 +177,8 @@ jobs:
         run: tests/lab build
 
       - name: Run the lab tests
+        env:
+          ODHCPD_LAB_REQUIRE: systemd,nm
         run: python3 -m pytest -c tests/pytest.ini tests -v -rxXs
 
       - name: Upload the lab's logs

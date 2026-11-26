@@ -8,10 +8,13 @@ def lan64(lab):
     return [a for a in lab.addresses('router', 'lan') if a.startswith('2001:db8:')][0]
 
 
-def test_relayed_ra_gives_slaac_addresses(lab):
+@pytest.mark.parametrize('node', ['slan-copenwrt', 'slan-csystemd', 'slan-cnm'])
+def test_relayed_ra_gives_slaac_addresses(lab, node):
+    if node not in lab.nodes:
+        pytest.skip(f'{node} is not in the lab (its client stack is not used)')
     prefix = lan64(lab)
     lab.wait_for(lambda: any(a.endswith('/64') and in_prefix(a, prefix)
-                             for a in lab.addresses('slan-copenwrt')), 20, 'a SLAAC address')
+                             for a in lab.addresses(node)), 20, 'a SLAAC address')
 
 
 @pytest.mark.xfail(reason='DHCPv6 through the relay does not reach slan-copenwrt yet', strict=True)

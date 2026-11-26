@@ -2,8 +2,9 @@
 
 Started by Lab.up() through `unshare --user --map-root-user --mount --net --fork`. It gives the
 lab a private /run, starts one holder process per node and per network (each in its own network,
-mount and UTS namespace), connects them with veth pairs, writes the lab's state file and then
-waits. Everything else (daemons, clients, shells) joins a holder's namespaces with nsenter.
+mount and UTS namespace; client nodes of the systemd and nm stacks also in their own user
+namespace), connects them with veth pairs, writes the lab's state file and then waits. The nodes
+to start are in the run directory's config.json (written by Lab.up()). Everything else (daemons, clients, shells) joins a holder's namespaces with nsenter.
 The lab ends when all its processes are gone (Lab.down() kills them).
 
 usage: python3 -m netlab.anchor <run dir>
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import time
 
+from .stacks import userns_args
 from .topology import NODES, NETWORKS, BRIDGE, members, mac
 
 
@@ -25,15 +27,19 @@ def sh(*cmd):
     subprocess.run(cmd, check=True)
 
 
-def holder(name):
-    """Start a process in new network/mount/UTS namespaces with its own /run; return its pid."""
+def holder(name, stack=None):
+    """Start a process in new network/mount/UTS namespaces (and for the host's client stacks a
+    user namespace) with its own /run; return its pid."""
     # /proc/sys/kernel/hostname belongs to the real root, so set the hostname via the syscall
-    # sysfs shows the devices of the namespace that mounts it, so each node gets its own
+    # sysfs shows the devices of the namespace that mounts it, so each node gets its own; the
+    # host's client stacks wait for udev if it is writable
+    ro = ' -o ro' if userns_args(stack) else ''
     script = (f'mount -t tmpfs -o mode=0755 tmpfs /run && mkdir -p /run/ubus && '
-              f'mount -t sysfs sysfs /sys && '
+              f'mount -t sysfs{ro} sysfs /sys && '
               f'{sys.executable} -c "import socket; socket.sethostname(\'{name}\')" && '
               f'exec sleep infinity')
-    p = subprocess.Popen(['unshare', '--net', '--mount', '--uts', '--propagation', 'private',
+    p = subprocess.Popen(['unshare'] + userns_args(stack) +
+                         ['--net', '--mount', '--uts', '--propagation', 'private',
                           'sh', '-c', script])
     HOLDERS.append(p)
     own = os.readlink('/proc/self/ns/net')
@@ -61,8 +67,9 @@ def main():
     rundir = sys.argv[1]
     sh('mount', '-t', 'tmpfs', '-o', 'mode=0755', 'tmpfs', '/run')
 
+    nodes = json.load(open(os.path.join(rundir, 'config.json')))['nodes']
     state = {'anchor': os.getpid(), 'userns': os.readlink('/proc/self/ns/user'),
-             'nodes': {}, 'networks': {}}
+             'nodes': {}, 'networks': {}, 'node_userns': {}}
     for net in NETWORKS:
         pid = holder(f'net-{net}')
         state['networks'][net] = pid
@@ -70,9 +77,11 @@ def main():
         sysctl(pid, 'net.ipv6.conf.all.disable_ipv6', 1)
         inside(pid, 'ip', 'link', 'add', 'name', BRIDGE, 'type', 'bridge', 'mcast_snooping', '0')
         inside(pid, 'ip', 'link', 'set', 'dev', BRIDGE, 'up')
-    for node in NODES:
-        pid = holder(node)
+    for node in nodes:
+        pid = holder(node, NODES[node].get('stack'))
         state['nodes'][node] = pid
+        if NODES[node].get('stack') in ('systemd', 'nm'):
+            state['node_userns'][node] = os.readlink(f'/proc/{pid}/ns/user')
         inside(pid, 'ip', 'link', 'set', 'dev', 'lo', 'up')
         for key in ('all', 'default'):
             sysctl(pid, f'net.ipv6.conf.{key}.accept_dad', 0)
@@ -80,7 +89,7 @@ def main():
     n = 0
     for net in NETWORKS:
         npid = state['networks'][net]
-        for node, ifname in members(net):
+        for node, ifname in members(net, nodes):
             n += 1
             a, b = f'lab{n}a', f'lab{n}b'
             sh('ip', 'link', 'add', 'name', a, 'type', 'veth', 'peer', 'name', b)
